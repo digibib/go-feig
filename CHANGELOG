@@ -1,0 +1,18 @@
+1.1.0 (2019-11-08)
+	Implement Write tags and AFI
+	API calls for writing inventory
+1.0.3 (2019-10-01)
+	Refactor project to golang standard package
+1.0.2 (2019-08-30)
+	HTML web component frontend
+1.0.1 (2019-06-01)
+	Functional prototype of API
+	simple frontend for starting scan loop
+	/.status endpoint
+1.0.0 (2019-05-01)
+	Implementation of cgo USB connector
+0.0.2 (2017-08-22)
+    Implemented simple EventSource route
+    Basic working read inventory and read tag data
+0.0.1 (2017-08-14)
+    Rude implementation of simple command protocol
