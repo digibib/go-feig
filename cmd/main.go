@@ -109,14 +109,6 @@ func main() {
 
 	// CORS Proxies
 	mux.HandleFunc("/spore", s.handleSpore)
-	mux.HandleFunc("/login", s.loginKoha)
-	mux.HandleFunc("/logout", s.logoutKoha)
-	mux.HandleFunc("/reviewsProxy", s.reviewsProxy)
-	mux.HandleFunc("/esProxy", s.esProxy)
-	mux.HandleFunc("/item/status", s.itemStatus)
-	mux.HandleFunc("/item/checkIn", s.itemCheckIn)
-	mux.HandleFunc("/item/checkOut", s.itemCheckOut)
-	mux.HandleFunc("/location", s.tagLocation)
 
 	// Cors middleware
 	c := cors.New(cors.Options{
