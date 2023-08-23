@@ -3,13 +3,13 @@ package main
 /*
 #cgo CFLAGS: -I../drivers -g -Wall
 #cgo linux LDFLAGS: -L. -lfeusb -lfetcp -lfeisc
-#cgo windows LDFLAGS: -L../drivers/vc141 -lfetcp -lfeusb -lfeisc
+#cgo windows LDFLAGS: -L../drivers/vc141 -lfeusb -lfetcp -lfeisc
 #cgo android LDFLAGS: -L../drivers/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
 #cgo arm64 LDFLAGS: -L../drivers/android/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
-#cgo armv7-a LDFLAGS: -L../drivers/armv7-a -lfetcp -lfeusb -lfeisc -lfecom -lstdc++
+#cgo armv7-a LDFLAGS: -L../drivers/armv7-a -lfetcp -lfeusb -lfeisc -lfecom -lstdc++ -lusb-1.0
 #cgo armv7-a CFLAGS: -mfloat-abi=hard -mfpu=vfp -mtls-dialect=gnu -march=armv7-a
-#cgo arm LDFLAGS: -L../drivers/arm -lfeudp -lfeusb -lfeisp
-#cgo arm CFLAGS: -mfloat-abi=hard -mfpu=vfp -march=armv6+fp
+//#cgo arm LDFLAGS: -L../drivers/arm -lfeudp -lfeusb -lfeisp
+//#cgo arm CFLAGS: -mfloat-abi=hard -mfpu=vfp -march=armv6+fp
 #include <stdlib.h>
 #include "../drivers/feusb.h"
 #include "../drivers/feisc.h"
@@ -40,7 +40,7 @@ func main() {
 	l := Logger{}
 	l.Print("Starting feiging...")
 	port := flag.String("port", ":1667", "port of http API")
-	wake := flag.Bool("wake", true, "Keep inventory state and keep all transponders awake")
+	wake := flag.Bool("wake", true, "Keep inventory state and keep all transponders awake, will not be able to read tag content")
 	tls := flag.Bool("tls", false, "use tls, read cert.pem and key.pem from same folder")
 	spore := flag.String("spore", "", "spore url to log rfid scans")
 	koha := flag.String("koha", "", "koha api url")
@@ -95,6 +95,8 @@ func main() {
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/stop", s.handleStop)
 	mux.HandleFunc("/write", s.writeTags)
+	mux.HandleFunc("/writetagbarcode", s.writeTagBarcode)
+
 	mux.HandleFunc("/alarmOff", s.alarmOff)
 	mux.HandleFunc("/alarmOn", s.alarmOn)
 

@@ -78,24 +78,37 @@ func newServer(r *Reader, wake bool, lgr Logger, spore string, koha string) *ser
 	}
 }
 
+// Ticker to periodically scan for tags
 func (s *server) readRFID() {
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	defer func() {
 		if err := recover(); err != nil {
 			if strings.Contains(fmt.Sprintf("%v", err), "close of closed channel") {
+				s.mu.Lock()
 				s.client = make(chan EsMsg)
+				s.mu.Unlock()
 				s.readRFID()
 			}
 		}
 	}()
+
+	// Periodically check for updates to msg channel
 	for {
 		select {
+		case _ = <-tick.C:
+			s.mu.Lock()
+			m := s.mode
+			s.mu.Unlock()
+			if m == modeScan {
+				// for each tick, real all tags in range if put in READ mode
+				s.Reader.ReadTagsInRange(s)
+			}
 		case msg := <-s.broadcast:
 			select {
 			case s.client <- msg:
-			case <-time.After(500 * time.Millisecond):
-				// drop it
+			case <-time.After(300 * time.Millisecond):
+				// drop it if noone respons after 1 sec
 			}
 		case c := <-s.register:
 			// clear inventory and close client
@@ -105,18 +118,16 @@ func (s *server) readRFID() {
 
 			close(s.client)
 
+			s.mu.Lock()
 			s.client = c
+			s.mu.Unlock()
 		case c := <-s.unregister:
 			close(c)
-			s.client = make(chan EsMsg) // dummy client we can close on register
-		default:
-			<-tick.C
 			s.mu.Lock()
-			m := s.mode
+			s.client = make(chan EsMsg) // dummy client we can close on register
 			s.mu.Unlock()
-			if m == modeScan {
-				s.Reader.ReadTagsInRange(s)
-			}
+		default:
+			// no-op if no events since last tick
 		}
 	}
 }

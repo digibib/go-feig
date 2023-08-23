@@ -2,17 +2,19 @@ package main
 
 /*
 #cgo CFLAGS: -I../drivers -g -Wall
-#cgo linux LDFLAGS: -L../drivers/linux -lfeusb -lfeisc
-#cgo windows LDFLAGS: -L../drivers/vc141 -lfeusb -lfeisc
+#cgo linux LDFLAGS: -L../drivers/linux -lfeusb -lfetcp -lfeisc
+#cgo windows LDFLAGS: -L../drivers/vc141 -lfeusb -lfetcp -lfeisc
 #cgo android LDFLAGS: -L../drivers/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
 #cgo arm64 LDFLAGS: -L../drivers/android/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
-#cgo armv7-a LDFLAGS: -L../drivers/armv7-a -lfetcp -lfeusb -lfeisc -lfecom -lstdc++
+#cgo armv7-a LDFLAGS: -L../drivers/armv7-a -lfetcp -lfeusb -lfeisc -lfecom -lstdc++ -lusb-1.0
 #cgo armv7-a CFLAGS: -mfloat-abi=hard -mfpu=vfp -mtls-dialect=gnu -march=armv7-a
-#cgo arm LDFLAGS: -L../drivers/arm -lfeudp -lfeusb -lfeisp
-#cgo arm CFLAGS: -mfloat-abi=hard -mfpu=vfp -march=armv6+fp
+//#cgo arm LDFLAGS: -L../drivers/arm -lfeudp -lfeusb -lfeisp
+//#cgo arm CFLAGS: -mfloat-abi=hard -mfpu=vfp -march=armv6+fp
 #include <stdlib.h>
 #include "../drivers/feusb.h"
 #include "../drivers/feisc.h"
+#include "../drivers/fetcp.h"
+#include "../drivers/libusb.h"
 */
 import "C"
 import (
@@ -230,14 +232,14 @@ func (r *Reader) GetSystemInformation(t *Tag) {
 }
 
 /*
-	Write Tag Content:
-	0x24 Write cmd
-	0x01 adressed mode
-	8bytes  uid
-	0x00 start block
-	0x09 num blocks
-	0x04 block size
-	n*4bytes data blocks
+Write Tag Content:
+0x24 Write cmd
+0x01 adressed mode
+8bytes  uid
+0x00 start block
+0x09 num blocks
+0x04 block size
+n*4bytes data blocks
 */
 func (r *Reader) WriteTagContent(t Tag) ([]byte, error) {
 	var reqBuf []C.uchar
@@ -294,8 +296,8 @@ func (r *Reader) WriteTagContent(t Tag) ([]byte, error) {
 }
 
 /*
-	activate AFI - cmd: 18, code: 27, data: 0x07
-	deactivate AFI - cmd: 18, cmd_code: 27, data: 0xC2
+activate AFI - cmd: 18, code: 27, data: 0x07
+deactivate AFI - cmd: 18, cmd_code: 27, data: 0xC2
 */
 func (r *Reader) WriteAFIByte(t Tag, afi byte) error {
 	var reqBuf []C.uchar
@@ -369,8 +371,35 @@ func (r *Reader) ReadTagsInRange(s *server) map[string]Tag {
 	return inv.Process(s)
 }
 
-/* TODO:
-   Might need to read inventory before writing, so we confirm right number of tags
+/*
+Overwrite barcode on single tag
+*/
+
+func (r *Reader) WriteTagBarcode(s *server, tagId, barcode string) (Tag, error) {
+	now := time.Now()
+	s.mu.Lock()
+	tag := s.inventory[tagId]
+	s.mu.Unlock()
+	tag.Content.Barcode = barcode
+	_, err := r.WriteTagContent(tag)
+	if err != nil {
+		// don't count these, they come always
+		if err.Error() != ErrResourceTempUnavailable.Error() {
+			s.Log.Debugf("ERROR READING INVENTORY: %v", err)
+			return tag, err
+		}
+	}
+	s.mu.Lock()
+	s.inventory[tagId] = tag
+	s.mu.Unlock()
+	s.Log.Debugf("WRITE TIMING: %s", time.Since(now))
+	return tag, nil
+}
+
+/*
+TODO:
+
+	Might need to read inventory before writing, so we confirm right number of tags
 */
 func (r *Reader) WriteToTagsInRange(s *server, barcode string) (map[string]Tag, error) {
 	s.mu.Lock()

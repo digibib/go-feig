@@ -103,9 +103,61 @@ func (s *server) scanOnce(w http.ResponseWriter, r *http.Request) {
 }
 
 /*
-   Write to tags in range
-   Uses last read inventory
-   input param: barcode
+   Write single tag in range
+   Uses tag from last inventory
+   input param: tagId, barcode
+*/
+
+func (s *server) writeTagBarcode(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	orig := s.mode
+	s.mu.Unlock()
+	tagid, ok := r.URL.Query()["tagid"]
+	barcode, ok := r.URL.Query()["barcode"]
+	if !ok || len(tagid[0]) < 1 {
+		http.Error(w, "Url Param 'tagid' is missing", http.StatusBadRequest)
+		return
+	}
+	if !ok || len(barcode[0]) < 1 {
+		http.Error(w, "Url Param 'barcode' is missing", http.StatusBadRequest)
+		return
+	}
+	if len(s.inventory) == 0 {
+		http.Error(w, "Inventory empty", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	s.mode = modeWrite
+	s.mu.Unlock()
+	tag, err := s.Reader.WriteTagBarcode(s, tagid[0], barcode[0])
+	if err != nil {
+		http.Error(w, "Error writing tag: "+err.Error(), http.StatusBadRequest)
+		s.mu.Lock()
+		s.mode = orig
+		s.mu.Unlock()
+		return
+	}
+	b, err := json.Marshal(tag)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.mu.Lock()
+		s.mode = orig
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Lock()
+	s.mode = orig
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
+/*
+Write barcode to all tags in range
+Will also write sequence number and total number to tags
+Uses last read inventory
+input param: barcode
 */
 func (s *server) writeTags(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
@@ -147,8 +199,9 @@ func (s *server) writeTags(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-/* Turn off alarm on all tags in range
-   Uses last read inventory
+/*
+Turn off alarm on all tags in range
+Uses last read inventory
 */
 func (s *server) alarmOff(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()

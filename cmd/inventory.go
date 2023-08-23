@@ -58,6 +58,11 @@ func newTagContent(bs []byte) (TagContent, error) {
 		Country:  string(tb[21:23]),
 		Library:  string(tb[23:32]),
 	}
+
+	// Strip leading "10" if the item belongs to Deichman (e.g. books before 2016 initated with 10)
+	if tc.Country == "NO" && strings.HasPrefix(tc.Barcode, "10030") {
+		tc.Barcode = strings.TrimPrefix(tc.Barcode, "10")
+	}
 	return tc, nil
 }
 
@@ -87,7 +92,7 @@ func (inv *Inventory) Process(s *server) map[string]Tag {
 	now := time.Now()
 	fmt.Println("PROCESSING INVENTORY...")
 	knownIDs := make(map[string]bool, 0) // placeholder for tag IDS
-	for k, _ := range inv.Tags {
+	for k := range inv.Tags {
 		knownIDs[k] = true
 		fmt.Printf("TAG ID %s\n", k)
 		if _, exists := s.inventory[k]; exists {
@@ -145,7 +150,7 @@ func (inv *Inventory) Process(s *server) map[string]Tag {
 
 	// remove tags no longer in range
 	s.mu.Lock()
-	for j, _ := range s.inventory {
+	for j := range s.inventory {
 		if _, exists := knownIDs[j]; !exists {
 			fmt.Printf("TAG NO LONGER IN RANGE, REMOVING: %s\n", j)
 			b, err := json.Marshal(s.inventory[j])
@@ -200,10 +205,12 @@ func getTags(buf []byte) map[string]Tag {
 	return ts
 }
 
-/* tag read content
-   process blocks of 5 bytes, (except first two and last, which are zero)
-   1st is security byte
-   then 4 bytes reversed
+/*
+tag read content
+
+	process blocks of 5 bytes, (except first two and last, which are zero)
+	1st is security byte
+	then 4 bytes reversed
 */
 func prepareReadTagBytes(bs []byte) ([]byte, error) {
 	if len(bs) < 5 {
@@ -223,9 +230,9 @@ func prepareReadTagBytes(bs []byte) ([]byte, error) {
 }
 
 /*
-  prepare tag content for write
-  content of 4 byte blocks reversed
-  and added security byte
+prepare tag content for write
+content of 4 byte blocks reversed
+and added security byte
 */
 func prepareWriteTagBytes(tc []byte) ([]byte, error) {
 	if len(tc) < 4 {
@@ -268,9 +275,9 @@ func btou16(b []byte) uint16 {
 }
 
 /*
-	CRC16 implementation
-	using CCITT reversed algorithm
-	ripped from github.com/howeyc/crc16 for performance
+CRC16 implementation
+using CCITT reversed algorithm
+ripped from github.com/howeyc/crc16 for performance
 */
 func makeCRCTable() [256]uint16 {
 	var tbl [256]uint16
