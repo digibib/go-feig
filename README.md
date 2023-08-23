@@ -1,12 +1,20 @@
 # Feiging
 
-Small project for examining the Feig RFID hardware and building an integration and easy communication/control system.
+Feig RFID hardware integration and API for simple implentation and control.
 
-## Documentation
+This software is released under MIT license from Deichman Public Library.
 
-Read more in ./docs folder
+Short description: This is a service that exposes a simple API to communication with FEIG hardware, either connected by USB, Serial or TCP.
+It encompasses the operations to read and write tags and AFI alarm on ISO15693 transponders using a FEIG device. It also wraps an HTTP eventsource
+endpoint for easy use by any browser app. In addition it allows for embedding any HTTP web page if included under ``./cmd/html` folder.
 
+## Installation and Requirements
 
+go version 1.19 or later is required, as well as `make` and FEIG SDK drivers and header files for the expected system to run on (windows / linux 64bit or Raspberry PI).
+Header files `feusb.h` etc. need to be placed under `drivers` or in system header folders.
+Drivers need to be included under `drivers/<architecture>` or in system driver folders.
+
+To build, e.g. for windows: run `make build_windows`
 ## Usage
 
 ```
@@ -46,6 +54,10 @@ Basic flow is:
     * desensitized: (`/alarmOff`)
     * sensitized: (`/alarmOn`)
 * `/.status` will at any time display uptime status, inventory and read success/failures
+
+## Documentation
+
+Read more in ./docs folder
 
 ## HTML interface
 
