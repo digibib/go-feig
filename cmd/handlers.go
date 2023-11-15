@@ -254,34 +254,6 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 }
 
-func (s *server) handleSpore(w http.ResponseWriter, r *http.Request) {
-	// just forward request to Spore and relay response
-	proxyReq, err := http.NewRequest("POST", s.sporeURL, r.Body)
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	copyHeader(proxyReq.Header, r.Header)
-
-	client := &http.Client{}
-	resp, err := client.Do(proxyReq)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-	var body []byte
-	body, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(body)
-}
-
 func (s *server) sendIndexFile(w http.ResponseWriter, r *http.Request) {
 	data, err := ioutil.ReadFile("./html/index.html")
 	if err != nil {
@@ -291,14 +263,6 @@ func (s *server) sendIndexFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
 }
 
 /* dummy udp connection to get outbound IP */

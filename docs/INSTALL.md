@@ -46,11 +46,3 @@ Cross origin requests may stop in browser if server is not serving TLS
 
     openssl req -newkey rsa:2048 -new -nodes -x509 -days 3650 -keyout key.pem -out cert.pem
 
-## frontend dev
-
-(DEV): install node
-```
-curl -sL https://deb.nodesource.com/setup_10.x -o nodesource_setup.sh
-sudo bash nodesource_setup.sh
-sudo apt-get install -y nodejs
-```

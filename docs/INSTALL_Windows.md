@@ -18,4 +18,5 @@ Copy runtime, drivers and html to wanted folder
 
     feisc.dll
     feusb.dll
-    feiging
+    fetcp.dll
+    feig.exe

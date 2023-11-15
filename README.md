@@ -1,4 +1,4 @@
-# Feiging
+# Feig RFID integration
 
 Feig RFID hardware integration and API for simple implentation and control.
 

@@ -107,9 +107,6 @@ func main() {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	// CORS Proxies
-	mux.HandleFunc("/spore", s.handleSpore)
-
 	// Cors middleware
 	c := cors.New(cors.Options{
 		//AllowedOrigins:   []string{"http://localhost:1667", "http://localhost:8081", "http://10.172.3.80:8081"},
