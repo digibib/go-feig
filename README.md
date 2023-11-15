@@ -58,7 +58,3 @@ Basic flow is:
 ## Documentation
 
 Read more in ./docs folder
-
-## HTML interface
-
-A simple Web Component allows interaction with reader and sends scans top spore
