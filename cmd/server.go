@@ -47,8 +47,6 @@ func (m modeType) String() string {
 
 type server struct {
 	inventory             map[string]Tag
-	sporeURL              string
-	kohaURL               string
 	startTime             time.Time
 	mode                  modeType
 	keepTranspondersAwake bool
@@ -59,22 +57,22 @@ type server struct {
 	register              chan (chan EsMsg)
 	unregister            chan (chan EsMsg)
 	broadcast             chan EsMsg
+	library               string
 }
 
-func newServer(r *Reader, wake bool, lgr Logger, spore string, koha string) *server {
+func newServer(r *Reader, wake bool, lgr Logger, library string) *server {
 	return &server{
 		inventory:             make(map[string]Tag, 0),
 		Reader:                r,
 		keepTranspondersAwake: wake,
 		Log:                   lgr,
-		sporeURL:              spore,
-		kohaURL:               koha,
 		startTime:             time.Now(),
 		mode:                  modeIdle,
 		client:                make(chan EsMsg), // dummy client to safely close on register/unregister
 		register:              make(chan (chan EsMsg)),
 		unregister:            make(chan (chan EsMsg)),
 		broadcast:             make(chan EsMsg),
+		library:               library,
 	}
 }
 

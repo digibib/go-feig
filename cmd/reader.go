@@ -413,8 +413,8 @@ func (r *Reader) WriteToTagsInRange(s *server, barcode string) (map[string]Tag, 
 			SeqNum:   uint8(c),
 			NumItems: uint8(l),
 			Barcode:  barcode,
-			Country:  "NO",       // hard coded for now
-			Library:  "02030000", // hard coded for now
+			Country:  "NO", // hard coded for now
+			Library:  s.library,
 		}
 		tag.Content = tc
 		_, err := r.WriteTagContent(tag)

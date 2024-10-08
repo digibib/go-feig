@@ -42,8 +42,7 @@ func main() {
 	port := flag.String("port", ":1667", "port of http API")
 	wake := flag.Bool("wake", true, "Keep inventory state and keep all transponders awake, will not be able to read tag content")
 	tls := flag.Bool("tls", false, "use tls, read cert.pem and key.pem from same folder")
-	spore := flag.String("spore", "", "spore url to log rfid scans")
-	koha := flag.String("koha", "", "koha api url")
+	library := flag.String("library", "02030000", "library ISIL number")
 	axeHost := flag.String("axeHost", "", "host of feiging axe")
 	axePort := flag.Int("axePort", 0, "port of feiging axe")
 	debug := flag.Bool("debug", false, "turn on verbose logging")
@@ -71,7 +70,7 @@ func main() {
 
 	r := newReader(iPortHandle)
 	l.Debug(r)
-	s := newServer(r, *wake, l, *spore, *koha)
+	s := newServer(r, *wake, l, *library)
 	go s.readRFID()
 
 	/*
@@ -107,10 +106,10 @@ func main() {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	// Cors middleware
+	// Cors middleware - NOT USED
 	c := cors.New(cors.Options{
-		//AllowedOrigins:   []string{"http://localhost:1667", "http://localhost:8081", "http://10.172.3.80:8081"},
 		AllowCredentials: true,
+		AllowedHeaders:   []string{"*"},
 		AllowOriginFunc:  func(origin string) bool { return true }, // disable cors entirely
 		// Enable Debugging for testing, consider disabling in production
 		Debug: false,
