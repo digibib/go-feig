@@ -1,6 +1,5 @@
 <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body {
   max-width: 980px;
-  outline: 1300px solid #fff;
   margin: 16px auto;
 }
 
@@ -501,8 +500,11 @@ body .markdown-body
   padding-bottom: 0.2em;
   margin: 0;
   font-size: 85%;
-  background-color: rgba(0,0,0,0.04);
   border-radius: 3px;
+}
+
+.markdown-body code:not(.highlight):not(.codehilite), .markdown-body samp {
+  background-color: rgba(0,0,0,0.04);
 }
 
 .markdown-body code:before,
@@ -533,8 +535,16 @@ body .markdown-body
   overflow: auto;
   font-size: 85%;
   line-height: 1.45;
-  background-color: #f7f7f7;
+}
+
+.markdown-body .codehilite,
+.markdown-body .highlight,
+.markdown-body pre {
   border-radius: 3px;
+}
+
+.markdown-body :not(.highlight) > pre {
+  background-color: #f7f7f7;
 }
 
 .markdown-body .codehilite pre,
@@ -1004,7 +1014,7 @@ body .markdown-body
   }
 }
 </style><style>/*GitHub*/
-.highlight {background-color:#fff;color:#333333;}
+.highlight {background-color:#f7f7f7;color:#333333;}
 .highlight .hll {background-color:#ffffcc;}
 .highlight .c{color:#999988;font-style:italic}
 .highlight .err{color:#a61717;background-color:#e3d2d2}
@@ -1077,7 +1087,7 @@ Feig integration software is currently compiled for the following architectures 
 <p>But could easily cross-compile to other targets given the drivers for the system exist</p>
 <h2 id="server">Server<a class="headerlink" href="#server" title="Permanent link"></a></h2>
 <p>The software runs a server on the USB (or Serial) connected machine:</p>
-<pre><code>localhost, port 1667, optionally using TLS
+<pre><code>localhost, port 1667, optionally using TLS (new browsers require TLS to allow cross-site scripting)
 </code></pre>
 <p>Communication with the RFID transponders are done through a JSON API described below.
 Two basic flows for communicating with the device are supported: polling or event-based</p>
@@ -1091,7 +1101,6 @@ Two basic flows for communicating with the device are supported: polling or even
     GET /events/    eventsource subscription
     GET /start      start scan loop
     GET /stop       stop scan loop
-    POST /spore     send inventory readings to spore (Koha specific api for logistics)
 </pre></div>
 
 <h3 id="status-endpoint">Status endpoint<a class="headerlink" href="#status-endpoint" title="Permanent link"></a></h3>

@@ -1,7 +1,6 @@
 PHONY: build all
 .DEFAULT_GOAL := help
 
-KOHA_API ?= http://localhost:8081/api
 DEBUG    ?= false
 WAKE     ?= true
 PORT     ?= :1667

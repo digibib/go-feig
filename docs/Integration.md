@@ -13,7 +13,7 @@ But could easily cross-compile to other targets given the drivers for the system
 
 The software runs a server on the USB (or Serial) connected machine:
 
-    localhost, port 1667, optionally using TLS
+    localhost, port 1667, optionally using TLS (new browsers require TLS to allow cross-site scripting)
 
 Communication with the RFID transponders are done through a JSON API described below.
 Two basic flows for communicating with the device are supported: polling or event-based
@@ -30,7 +30,6 @@ Two basic flows for communicating with the device are supported: polling or even
     GET /events/    eventsource subscription
     GET /start      start scan loop
     GET /stop       stop scan loop
-    POST /spore     send inventory readings to spore (Koha specific api for logistics)
 ```
 ### Status endpoint
 

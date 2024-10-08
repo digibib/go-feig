@@ -15,6 +15,7 @@ Header files `feusb.h` etc. need to be placed under `drivers` or in system heade
 Drivers need to be included under `drivers/<architecture>` or in system driver folders.
 
 To build, e.g. for windows: run `make build_windows`
+
 ## Usage
 
 ```
@@ -22,13 +23,17 @@ To build, e.g. for windows: run `make build_windows`
     	turn on verbose logging
   -port string
     	port of http API (default ":1666")
-  -spore string
-    	spore url to log rfid scans
+  -library string
+        the ISIL number of the library (exclusive country code)
   -wake
     	Keep inventory state and keep all transponders awake (default true)
+  -axeHost
+        host ip/name of a TCP connected Feig Axe in same network
+  -axePort
+        port of a TCP connected Feig Axe in same network
 ```
 
-Application fires up a http server and mounts web content from ./html folder
+Application fires up a http server and mounts optional web content from ./html folder
 
 **API routes:**
 
@@ -37,10 +42,10 @@ Application fires up a http server and mounts web content from ./html folder
     /events/    eventsource subscription
 
     /scan    	scan inventory once
-    /start 		start scan loop
+    /start 		start scan loop (send to any connected EventSource client)
     /stop 		stop scan loop
-    /spore		send inventory readings to spore
     /write 		write to tags in range (param: barcode)
+    /writetagbarcode  write to a single tag in current inventory (params: tagid, barcode)
     /alarmOff 	turn off AFI alarm on all tags in range
     /alarmOn 	turn on AFI alarm on all tags in range
 ```
@@ -53,7 +58,7 @@ Basic flow is:
     * rewritten: all tags in range are written to using sequence number and number of tags (`/write?barcode=1234567890`)
     * desensitized: (`/alarmOff`)
     * sensitized: (`/alarmOn`)
-* `/.status` will at any time display uptime status, inventory and read success/failures
+* `/.status` will at any time display uptime status, current inventory and read success/failures
 
 ## Documentation
 
