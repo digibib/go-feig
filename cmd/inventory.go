@@ -53,14 +53,14 @@ func newTagContent(bs []byte) (TagContent, error) {
 	tc := TagContent{
 		NumItems: tb[1],
 		SeqNum:   tb[2],
-		Barcode:  string(tb[3:19]),
+		Barcode:  strings.TrimRight(string(tb[3:19]), "\u0000"),
 		Crc:      tb[19:21],
 		Country:  string(tb[21:23]),
-		Library:  string(tb[23:32]),
+		Library:  strings.TrimRight(string(tb[23:32]), "\u0000"),
 	}
 
 	// Strip leading "10" if the item belongs to Deichman (e.g. books before 2016 initated with 10)
-	if tc.Country == "NO" && strings.HasPrefix(tc.Barcode, "10030") {
+	if tc.Country == "NO" && strings.HasPrefix(tc.Barcode, "10") && len(tc.Barcode) == 16 {
 		tc.Barcode = strings.TrimPrefix(tc.Barcode, "10")
 	}
 	return tc, nil
