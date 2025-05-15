@@ -1,3 +1,7 @@
+1.2.0 (2024-12-03)
+    Allow custom headers
+    Disable CORS
+    Support tls certificate
 1.1.0 (2019-11-08)
 	Implement Write tags and AFI
 	API calls for writing inventory

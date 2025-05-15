@@ -19,18 +19,20 @@ To build, e.g. for windows: run `make build_windows`
 ## Usage
 
 ```
+  -axeHost string
+        host of feiging axe
+  -axePort int
+        port of feiging axe
   -debug
-    	turn on verbose logging
-  -port string
-    	port of http API (default ":1666")
+        turn on verbose logging
   -library string
-        the ISIL number of the library (exclusive country code)
+        library ISIL number (default "02030000")
+  -port string
+        port of http API (default ":1667")
+  -tls
+        use tls, read cert.pem and key.pem from same folder
   -wake
-    	Keep inventory state and keep all transponders awake (default true)
-  -axeHost
-        host ip/name of a TCP connected Feig Axe in same network
-  -axePort
-        port of a TCP connected Feig Axe in same network
+        Keep inventory state and keep all transponders awake, will not be able to read tag content (default true)
 ```
 
 Application fires up a http server and mounts optional web content from ./html folder
@@ -53,7 +55,7 @@ Application fires up a http server and mounts optional web content from ./html f
 Basic flow is:
 
 * inventory is fetched and kept in memory either by polling `/scan` or by activating scan loop with `/start`
-* barcodes can be used to fetch and present information, e.g. from spore
+* barcodes can be used to fetch and present information
 * at any time a current inventory can be
     * rewritten: all tags in range are written to using sequence number and number of tags (`/write?barcode=1234567890`)
     * desensitized: (`/alarmOff`)
