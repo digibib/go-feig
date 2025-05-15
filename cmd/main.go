@@ -108,9 +108,10 @@ func main() {
 
 	// Cors middleware - NOT USED
 	c := cors.New(cors.Options{
-		AllowCredentials: true,
-		AllowedHeaders:   []string{"*"},
-		AllowOriginFunc:  func(origin string) bool { return true }, // disable cors entirely
+		AllowCredentials:    true,
+		AllowPrivateNetwork: true,
+		AllowedHeaders:      []string{"*"},
+		AllowOriginFunc:     func(origin string) bool { return true }, // disable cors entirely
 		// Enable Debugging for testing, consider disabling in production
 		Debug: false,
 	})
