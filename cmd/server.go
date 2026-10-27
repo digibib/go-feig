@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const VERSION = "1.2.0"
+const VERSION = "1.2.1"
 
 type ServerStatus struct {
 	Uptime        string
@@ -54,27 +54,25 @@ type server struct {
 	startTime             time.Time
 	mode                  modeType
 	keepTranspondersAwake bool
+	onlyOneActive         bool
 	Log                   Logger
 	Reader                *Reader
 	mu                    sync.Mutex
-	client                chan EsMsg
-	register              chan (chan EsMsg)
-	unregister            chan (chan EsMsg)
+	messageChannels       map[chan EsMsg]bool
 	broadcast             chan EsMsg
 	library               string
 }
 
-func newServer(r *Reader, wake bool, lgr Logger, library string) *server {
+func newServer(r *Reader, wake bool, onlyOne bool, lgr Logger, library string) *server {
 	return &server{
 		inventory:             make(map[string]Tag, 0),
 		Reader:                r,
 		keepTranspondersAwake: wake,
+		onlyOneActive:         onlyOne,
 		Log:                   lgr,
 		startTime:             time.Now(),
 		mode:                  modeIdle,
-		client:                make(chan EsMsg), // dummy client to safely close on register/unregister
-		register:              make(chan (chan EsMsg)),
-		unregister:            make(chan (chan EsMsg)),
+		messageChannels:       make(map[chan EsMsg]bool),
 		broadcast:             make(chan EsMsg),
 		library:               library,
 	}
@@ -87,8 +85,10 @@ func (s *server) readRFID() {
 	defer func() {
 		if err := recover(); err != nil {
 			if strings.Contains(fmt.Sprintf("%v", err), "close of closed channel") {
+				// is this neccessary? a recovery channel just to be closed?
 				s.mu.Lock()
-				s.client = make(chan EsMsg)
+				msgChan := make(chan EsMsg)
+				s.messageChannels[msgChan] = true
 				s.mu.Unlock()
 				s.readRFID()
 			}
@@ -106,28 +106,13 @@ func (s *server) readRFID() {
 				// for each tick, real all tags in range if put in READ mode
 				s.Reader.ReadTagsInRange(s)
 			}
+		// go message on broadcast channel, attempt send to any connected clients
 		case msg := <-s.broadcast:
-			select {
-			case s.client <- msg:
-			case <-time.After(300 * time.Millisecond):
-				// drop it if noone respons after 1 sec
-			}
-		case c := <-s.register:
-			// clear inventory and close client
-			s.mu.Lock()
-			s.inventory = make(map[string]Tag, 0)
-			s.mu.Unlock()
-
-			close(s.client)
-
-			s.mu.Lock()
-			s.client = c
-			s.mu.Unlock()
-		case c := <-s.unregister:
-			close(c)
-			s.mu.Lock()
-			s.client = make(chan EsMsg) // dummy client we can close on register
-			s.mu.Unlock()
+			go func() {
+				for msgChan := range s.messageChannels {
+					msgChan <- msg
+				}
+			}()
 		default:
 			// no-op if no events since last tick
 		}

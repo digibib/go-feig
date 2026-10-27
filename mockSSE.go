@@ -49,6 +49,7 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
       fmt.Fprintf(w, "data: %s\n\n", msg.Data)
       w.(http.Flusher).Flush()
     case <-r.Context().Done():
+      log.Println("client closed connection")
       delete(messageChannels, msgChan)
       return
     }

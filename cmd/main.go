@@ -39,6 +39,7 @@ func main() {
 	l.Print("Starting feiging...")
 	port := flag.String("port", ":1667", "port of http API")
 	wake := flag.Bool("wake", true, "Keep inventory state and keep all transponders awake, will not be able to read tag content")
+	onlyOne := flag.Bool("onlyOne", true, "kick out any other client upon new connection")
 	tls := flag.Bool("tls", false, "use tls, read cert.pem and key.pem from same folder")
 	library := flag.String("library", "02030000", "library ISIL number")
 	axeHost := flag.String("axeHost", "", "host of feiging axe")
@@ -68,7 +69,7 @@ func main() {
 
 	r := newReader(iPortHandle)
 	l.Debug(r)
-	s := newServer(r, *wake, l, *library)
+	s := newServer(r, *wake, *onlyOne, l, *library)
 	go s.readRFID()
 
 	/*

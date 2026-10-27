@@ -7,15 +7,12 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"time"
 )
 
 type EsMsg struct {
 	Event string
 	Data  []byte
 }
-
-var semaphore = make(chan struct{}, 1)
 
 func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
@@ -28,13 +25,12 @@ func enableCors(w *http.ResponseWriter) {
 
 // request handler for event source stream
 func (s *server) esHandler(w http.ResponseWriter, r *http.Request) {
-	// Limit to 1 synchronous client
-	defer func() { <-semaphore }()
-	select {
-	case semaphore <- struct{}{}:
-	case <-time.After(2 * time.Second):
-		http.Error(w, "Busy, only tab at a time please!", http.StatusServiceUnavailable)
-		return
+	if s.onlyOneActive {
+		// Disconnect any other registered eventsource
+		for mc := range s.messageChannels {
+			close(mc)
+			delete(s.messageChannels, mc)
+		}
 	}
 
 	// Make sure that the writer supports flushing.
@@ -46,14 +42,19 @@ func (s *server) esHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create a new channel for messages
 	msgChan := make(chan EsMsg)
-	s.register <- msgChan
+	s.messageChannels[msgChan] = true
 
 	// request context done? client disconnected, so unregister
 	notify := r.Context().Done()
 	go func() {
 		<-notify
-		s.unregister <- msgChan
+		if !s.onlyOneActive {
+			close(msgChan)
+
+		}
+		delete(s.messageChannels, msgChan)
 		log.Println("HTTP connection just closed.")
+		return
 	}()
 
 	// EventStream headers
@@ -62,12 +63,11 @@ func (s *server) esHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// keep pushing messages for clients from msgChan until closed
 	for msg := range msgChan {
-
 		// Write to the ResponseWriter, `w`.
 		fmt.Fprintf(w, "event: %s\n", msg.Event)
 		fmt.Fprintf(w, "data: %s\n\n", msg.Data)
-
 		// Flush the response.  This is only possible if the repsonse supports streaming.
 		f.Flush()
 	}
