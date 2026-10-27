@@ -17,6 +17,15 @@ type EsMsg struct {
 
 var semaphore = make(chan struct{}, 1)
 
+func enableCors(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With")
+	(*w).Header().Set("Access-Control-Allow-Credentials", "true")
+	(*w).Header().Set("Access-Control-Max-Age", "300") // 5 minutes
+	(*w).Header().Set("Access-Control-Allow-Private-Network", "true")
+}
+
 // request handler for event source stream
 func (s *server) esHandler(w http.ResponseWriter, r *http.Request) {
 	// Limit to 1 synchronous client
@@ -48,6 +57,7 @@ func (s *server) esHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// EventStream headers
+	enableCors(&w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -73,6 +83,8 @@ func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	printHeaders(r)
+	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -94,6 +106,7 @@ func (s *server) scanOnce(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.mode = orig
 	s.mu.Unlock()
+	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -145,6 +158,7 @@ func (s *server) writeTagBarcode(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.mode = orig
 	s.mu.Unlock()
+	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -191,6 +205,7 @@ func (s *server) writeTags(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.mode = orig
 	s.mu.Unlock()
+	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
@@ -216,6 +231,7 @@ func (s *server) alarmOff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mode = orig
+	enableCors(&w)
 	w.Write([]byte("OK"))
 }
 
@@ -237,6 +253,7 @@ func (s *server) alarmOn(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mode = orig
+	enableCors(&w)
 	w.Write([]byte("OK"))
 }
 
@@ -259,14 +276,27 @@ func (s *server) sendIndexFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Couldn't read file", http.StatusInternalServerError)
 		return
 	}
+	enableCors(&w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
 }
 
+// No longer in use
 func copyHeader(dst, src http.Header) {
 	for k, vv := range src {
 		for _, v := range vv {
 			dst.Add(k, v)
+		}
+	}
+}
+
+func printHeaders(r *http.Request) {
+	log.Println("HTTP request headers.")
+	// Loop over header names
+	for name, values := range r.Header {
+		// Loop over all values for the name (as a header can have multiple values)
+		for _, value := range values {
+			log.Printf("%s: %s\n", name, value)
 		}
 	}
 }

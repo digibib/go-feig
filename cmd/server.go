@@ -8,12 +8,15 @@ import (
 	"time"
 )
 
+const VERSION = "1.2.0"
+
 type ServerStatus struct {
 	Uptime        string
 	Reader        *Reader
 	LastInventory map[string]Tag
 	Client        net.IP
 	Mode          string
+	Version       string
 }
 
 func (s *server) ServerStatus() *ServerStatus {
@@ -26,6 +29,7 @@ func (s *server) ServerStatus() *ServerStatus {
 		LastInventory: s.inventory,
 		Client:        getMyIP(),
 		Mode:          s.mode.String(),
+		Version:       VERSION,
 	}
 }
 

@@ -26,8 +26,6 @@ import (
 	"net/http/pprof"
 
 	"embed"
-
-	"github.com/rs/cors"
 )
 
 var (
@@ -106,19 +104,10 @@ func main() {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	// Cors middleware - NOT USED
-	c := cors.New(cors.Options{
-		AllowCredentials:    true,
-		AllowPrivateNetwork: true,
-		AllowedHeaders:      []string{"*"},
-		AllowOriginFunc:     func(origin string) bool { return true }, // disable cors entirely
-		// Enable Debugging for testing, consider disabling in production
-		Debug: false,
-	})
 	l.Printf("Starting web server at port %s\n", *port)
 	if *tls == true {
-		log.Fatal(http.ListenAndServeTLS(*port, "cert.pem", "key.pem", c.Handler(mux)))
+		log.Fatal(http.ListenAndServeTLS(*port, "cert.pem", "key.pem", mux))
 	} else {
-		log.Fatal(http.ListenAndServe(*port, c.Handler(mux)))
+		log.Fatal(http.ListenAndServe(*port, mux))
 	}
 }
