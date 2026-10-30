@@ -50,6 +50,9 @@ func newTagContent(bs []byte) (TagContent, error) {
 	if err != nil {
 		return TagContent{}, err
 	}
+	if len(tb) < 32 {
+		return TagContent{}, errors.New("newTagContent: not enough tag content bytes")
+	}
 	tc := TagContent{
 		NumItems: tb[1],
 		SeqNum:   tb[2],
@@ -102,7 +105,7 @@ func (inv *Inventory) Process(s *server) map[string]Tag {
 			fmt.Printf("NEW TAG ADDED: %s\n", k)
 			tag := inv.Tags[k]
 			//s.Reader.GetSystemInformation(&tag)
-			d, err := s.Reader.ReadTagContent(&tag)
+			d, err := s.Reader.doReadTagContent(&tag)
 			if err != nil {
 				if err.Error() != ErrResourceTempUnavailable.Error() {
 					fmt.Printf("ERROR READING TAG DATA: %v\n", err)
@@ -208,45 +211,35 @@ func getTags(buf []byte) map[string]Tag {
 /*
 tag read content
 
-	process blocks of 5 bytes, (except first two and last, which are zero)
-	1st is security byte
-	then 4 bytes reversed
+	The FEDM SDK returns the read data blocks in memory order, which is the
+	Dansk standard layout itself, no transformation needed.
+
+	(With the legacy FEIG C API the response was framed and each 4-byte block
+	was word-reversed, which the old implementation undid here.)
 */
 func prepareReadTagBytes(bs []byte) ([]byte, error) {
-	if len(bs) < 5 {
+	if len(bs) < 4 {
 		return nil, errors.New("prepareReadTagBytes: Not enough bytes")
 	}
-	lim := 5
-	var chunk []byte
-	blks := bs[2 : len(bs)-2]
-	data := make([]byte, 0)
-	for len(blks) >= lim {
-		chunk, blks = blks[:lim], blks[lim:]
-		// Skip first byte (unused security byte) and reverse block (4bytes)
-		blk := reverseBytes(chunk[1:])
-		data = append(data, blk...)
+	if len(bs)%4 != 0 {
+		return nil, errors.New("prepareReadTagBytes: Data is not a multiple of 4 bytes")
 	}
-	return data, nil
+	return bs, nil
 }
 
 /*
 prepare tag content for write
-content of 4 byte blocks reversed
-and added security byte
+
+	Write the Dansk standard layout as-is to data blocks 0..8.
 */
 func prepareWriteTagBytes(tc []byte) ([]byte, error) {
 	if len(tc) < 4 {
 		return nil, errors.New("prepareWriteBytes: Not enough bytes")
 	}
-	data := make([]byte, 0)
-	for i := 0; i <= len(tc)-4; i += 4 {
-		blk := reverseBytes(tc[i : i+4])
-		//data = append(data, 0x00) // security byte
-		data = append(data, blk...)
+	if len(tc)%4 != 0 {
+		return nil, errors.New("prepareWriteBytes: Data is not a multiple of 4 bytes")
 	}
-	//data = append([]byte{0x00, 0x00}, data...)
-	//data = append(data, []byte{0x00, 0x00}...)
-	return data, nil
+	return tc, nil
 }
 
 /* UTILITY FUNCTIONS */

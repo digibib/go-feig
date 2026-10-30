@@ -7,7 +7,7 @@ Feig integration software is currently compiled for the following architectures 
 * x86_64 Linux
 * arm64 Raspberry PI
 
-But could easily cross-compile to other targets given the drivers for the system exist
+But could easily cross-compile to other targets given the FEDM SDK for the system exists
 
 ## Server
 
@@ -24,12 +24,16 @@ Two basic flows for communicating with the device are supported: polling or even
     GET /.status    server status endpoint
     GET /scan       scan inventory once
     GET /write      write to tags in range (param: barcode)
+    GET /writetagbarcode  write to a single tag in current inventory (params: tagid, barcode)
     GET /alarmOff   turn off AFI alarm on all tags in range
     GET /alarmOn    turn on AFI alarm on all tags in range
 
     GET /events/    eventsource subscription
     GET /start      start scan loop
     GET /stop       stop scan loop
+
+    GET /ble/scan   start/continue BLE discovery, list discovered readers
+    GET /ble/stop   stop BLE discovery
 ```
 ### Status endpoint
 
@@ -45,13 +49,12 @@ example: *GET /.status*
 {
   "Uptime": "9h21m1.891119464s",
   "Reader": {
-    "StrHandle": null,
-    "PortHandle": 268435457,
-    "ReaderHandle": 1,
+    "Connected": true,
+    "ConnType": "usb",
     "Serial": "117716D3",
-    "IntSerial": 293017299,
     "Name": "ID ISC.MR101-U",
-    "Family": "OBID i-scan Midrange",
+    "FwVersion": "7.0.1",
+    "LibVersion": "6.1.0",
     "ReadInvFail": 0,
     "ReadInvSucc": 12,
     "ReadTagFail": 0,
@@ -63,7 +66,8 @@ example: *GET /.status*
   },
   "LastInventory": {},
   "Client": "10.173.65.31",
-  "Mode": "IDLE"
+  "Mode": "IDLE",
+  "Version": "2.0.0"
 }
 ```
 
@@ -120,7 +124,32 @@ Turn on AFI on all tags in range. Response is always 200 OK
 
 *GET /alarmOff*
 
-Turn on AFI on all tags in range. Response is always 200 OK
+Turn off AFI on all tags in range. Response is always 200 OK
+
+### Bluetooth LE
+
+Readers with Bluetooth Low Energy can be discovered over HTTP without a prior connection.
+
+*GET /ble/scan*
+
+Starts (or continues) the BLE discovery and returns a JSON array of the readers seen so far. The discovery keeps running until stopped. To use a discovered reader as the connected device, start the app with `-bleMac <mac>`.
+
+example: *GET /ble/scan*
+
+```JSON
+[
+  {
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "deviceId": "117716D3",
+    "readerType": "ID ECCO Smart UHF BLE",
+    "new": true
+  }
+]
+```
+
+*GET /ble/stop*
+
+Stops the BLE discovery. Response is always 200 OK
 
 
 ### Polling - not recommended for continuous checkin/checkout operations

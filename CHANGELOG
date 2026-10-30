@@ -1,3 +1,12 @@
+2.0.0 (2026-10-28)
+	Refactor to FEIG FEDM C++ SDK (libfedm) via cgo shim (cmd/fedm_shim.cpp)
+	Windows x64 cross build (make build_windows, zig cc/c++) using bundled FEDM SDK win-vc143-x64
+	FEDM SDK packages live per platform under fedm/: linux-x64, win-vc143-x64
+	Bluetooth LE support: reader discovery (/ble/scan, /ble/stop) and connect with -bleMac
+	Supports USB (auto scan), serial COM, TCP (axe) and BLE connectors
+	AFI alarm on/off is a single non-addressed broadcast write
+	Reader operations are serialized with a mutex
+	Tag content is read/written in Dansk standard layout as-is (legacy API word-reversal no longer applied)
 1.2.0 (2024-12-03)
     Allow custom headers
     Disable CORS

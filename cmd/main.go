@@ -1,23 +1,5 @@
 package main
 
-/*
-#cgo CFLAGS: -I../drivers -g -Wall
-#cgo linux LDFLAGS: -L. -lfeusb -lfetcp -lfeisc
-#cgo windows LDFLAGS: -L../drivers/vc141 -lfeusb -lfetcp -lfeisc
-#cgo android LDFLAGS: -L../drivers/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
-#cgo arm64 LDFLAGS: -L../drivers/android/arm64-v8a -lfetcp -lfeusb -lfeisc -lfecom -lusb1.0
-#cgo armv7-a LDFLAGS: -L../drivers/armv7-a -lfetcp -lfeusb -lfeisc -lfecom -lstdc++ -lusb-1.0
-#cgo armv7-a CFLAGS: -mfloat-abi=hard -mfpu=vfp -mtls-dialect=gnu -march=armv7-a
-//#cgo arm LDFLAGS: -L../drivers/arm -lfeudp -lfeusb -lfeisp
-//#cgo arm CFLAGS: -mfloat-abi=hard -mfpu=vfp -march=armv6+fp
-#include <stdlib.h>
-#include "../drivers/feusb.h"
-#include "../drivers/feisc.h"
-#include "../drivers/fetcp.h"
-#include "../drivers/libusb.h"
-*/
-import "C"
-
 import (
 	"flag"
 	"io/fs"
@@ -42,8 +24,12 @@ func main() {
 	onlyOne := flag.Bool("onlyOne", true, "kick out any other client upon new connection")
 	tls := flag.Bool("tls", false, "use tls, read cert.pem and key.pem from same folder")
 	library := flag.String("library", "02030000", "library ISIL number")
-	axeHost := flag.String("axeHost", "", "host of feiging axe")
+	axeHost := flag.String("axeHost", "", "host of feiging axe (tcp)")
 	axePort := flag.Int("axePort", 0, "port of feiging axe")
+	bleMac := flag.String("bleMac", "", "MAC address of reader to connect to over Bluetooth LE (e.g. AA:BB:CC:DD:EE:FF)")
+	comPort := flag.String("comPort", "", "serial port of reader (e.g. /dev/ttyUSB0)")
+	comFrame := flag.String("comFrame", "8E1", "serial byte frame (8E1 | 8N1 | 8O1)")
+	comBaud := flag.Int("comBaud", 38400, "serial baudrate")
 	debug := flag.Bool("debug", false, "turn on verbose logging")
 	flag.Parse()
 
@@ -51,24 +37,29 @@ func main() {
 		l.PrintDebug = true
 	}
 
-	var iPortHandle C.int
-	var err error
-	if *axeHost != "" && *axePort != 0 {
+	r := newReader()
+
+	// Pick connection type: BLE > serial COM > TCP (axe) > USB (auto scan)
+	var connErr error
+	switch {
+	case *bleMac != "":
+		l.Printf("Connecting to BLE reader %s", *bleMac)
+		connErr = r.ConnectBle(*bleMac)
+	case *comPort != "":
+		l.Printf("Connecting to reader on serial port %s", *comPort)
+		connErr = r.ConnectCom(*comPort, *comFrame, *comBaud)
+	case *axeHost != "" && *axePort != 0:
 		l.Printf("Connecting to axe at host %s port %d", *axeHost, *axePort)
-		iPortHandle, err = C.FETCP_Connect(C.CString(*axeHost), C.int(*axePort))
-	} else {
-		iPortHandle, err = C.FEUSB_ScanAndOpen(C.FEUSB_SCAN_FIRST, nil)
+		connErr = r.ConnectTcp(*axeHost, *axePort)
+	default:
+		l.Print("Scanning for USB reader...")
+		connErr = r.ConnectUsb()
 	}
-	if iPortHandle < 0 {
-		l.Printf("No RFID Device found!")
-		errBuf := make([]C.char, 56)
-		C.FEUSB_GetErrorText(C.int(iPortHandle), &errBuf[0])
-		l.Printf("ERROR: %d, %s\n", iPortHandle, C.GoString(&errBuf[0]))
-
+	if connErr != nil {
+		l.Printf("No RFID Device found! %v", connErr)
 	}
-
-	r := newReader(iPortHandle)
 	l.Debug(r)
+
 	s := newServer(r, *wake, *onlyOne, l, *library)
 	go s.readRFID()
 
@@ -97,6 +88,10 @@ func main() {
 
 	mux.HandleFunc("/alarmOff", s.alarmOff)
 	mux.HandleFunc("/alarmOn", s.alarmOn)
+
+	// BLE discovery
+	mux.HandleFunc("/ble/scan", s.bleScan)
+	mux.HandleFunc("/ble/stop", s.bleStop)
 
 	// debug pprof handlers
 	mux.HandleFunc("/debug/pprof/", pprof.Index)

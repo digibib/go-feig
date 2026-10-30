@@ -211,48 +211,95 @@ func (s *server) writeTags(w http.ResponseWriter, r *http.Request) {
 }
 
 /*
-Turn off alarm on all tags in range
-Uses last read inventory
+Turn off alarm on all tags in range (single non-addressed broadcast write)
 */
 func (s *server) alarmOff(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	orig := s.mode
-	if len(s.inventory) == 0 {
+	empty := len(s.inventory) == 0
+	s.mu.Unlock()
+	if empty {
 		http.Error(w, "Inventory empty", http.StatusBadRequest)
 		return
 	}
+	s.mu.Lock()
+	orig := s.mode
 	s.mode = modeWriteAFI
-	for id, tag := range s.inventory {
-		if err := s.Reader.WriteAFIByte(tag, 0xc2); err != nil {
-			http.Error(w, fmt.Sprintf("Failed activating alarm on id %s, err: %s ", id, err.Error()), http.StatusInternalServerError)
-			s.mode = orig
-			return
-		}
+	s.mu.Unlock()
+	// Note: don't hold s.mu here, reader ops take reader lock first
+	if err := s.Reader.WriteAFI(0xc2); err != nil {
+		s.mu.Lock()
+		s.mode = orig
+		s.mu.Unlock()
+		http.Error(w, fmt.Sprintf("Failed turning off alarm, err: %s ", err.Error()), http.StatusInternalServerError)
+		return
 	}
+	s.mu.Lock()
 	s.mode = orig
+	s.mu.Unlock()
 	enableCors(&w)
 	w.Write([]byte("OK"))
 }
 
+/*
+Turn on alarm on all tags in range (single non-addressed broadcast write)
+*/
 func (s *server) alarmOn(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	orig := s.mode
-	if len(s.inventory) == 0 {
+	empty := len(s.inventory) == 0
+	s.mu.Unlock()
+	if empty {
 		http.Error(w, "Inventory empty", http.StatusBadRequest)
-		s.mode = orig
 		return
 	}
+	s.mu.Lock()
+	orig := s.mode
 	s.mode = modeWriteAFI
-	for id, tag := range s.inventory {
-		if err := s.Reader.WriteAFIByte(tag, 0x07); err != nil {
-			http.Error(w, fmt.Sprintf("Failed activating alarm on id %s, err: %s ", id, err.Error()), http.StatusInternalServerError)
-			s.mode = orig
-			return
-		}
+	s.mu.Unlock()
+	// Note: don't hold s.mu here, reader ops take reader lock first
+	if err := s.Reader.WriteAFI(0x07); err != nil {
+		s.mu.Lock()
+		s.mode = orig
+		s.mu.Unlock()
+		http.Error(w, fmt.Sprintf("Failed activating alarm, err: %s ", err.Error()), http.StatusInternalServerError)
+		return
 	}
+	s.mu.Lock()
 	s.mode = orig
+	s.mu.Unlock()
+	enableCors(&w)
+	w.Write([]byte("OK"))
+}
+
+/*
+Start (or continue) Bluetooth LE discovery and return the readers found so far.
+The discovery keeps running until stopped with /ble/stop.
+To connect to a discovered reader, start the app with -bleMac <mac>.
+*/
+func (s *server) bleScan(w http.ResponseWriter, r *http.Request) {
+	if err := s.Reader.BleStartDiscover(); err != nil {
+		s.Log.Debugf("BLE scan: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	items := s.Reader.BleList()
+	b, err := json.Marshal(items)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	enableCors(&w)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
+/*
+Stop Bluetooth LE discovery
+*/
+func (s *server) bleStop(w http.ResponseWriter, r *http.Request) {
+	if err := s.Reader.BleStopDiscover(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	enableCors(&w)
 	w.Write([]byte("OK"))
 }
