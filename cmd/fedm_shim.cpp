@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "fedm/Fedm.h"
+#include "fedm/FedmErrCode.h"
 #include "fedm_shim.h"
 
 namespace {
@@ -62,7 +63,11 @@ int createAndConnect(const FEDM::Connector &connector) {
 
     int ret = g_state.rdr->connect(connector);
     if (ret < 0) {
-        setErr(lastErrorText());
+        // lastErrorStatusText() often stays "Ok" for transport-level
+        // failures, so report the numeric library error code too
+        setErr("connect failed: ret=" + std::to_string(ret)
+             + ", " + FEDM::ErrorCode::toString(g_state.rdr->lastError())
+             + ", status: " + g_state.rdr->lastErrorStatusText());
         return FEDM_SHIM_ERR;
     }
 
@@ -141,15 +146,25 @@ extern "C" int fedm_connect_usb(void) {
     FEDM::UsbManager::stopDiscover();
     int ret = FEDM::UsbManager::startDiscover(nullptr);
     if (ret < 0) {
-        setErr(FEDM::UsbManager::lastErrorText());
+        setErr("usb startDiscover failed: ret=" + std::to_string(ret)
+             + ", lastError=" + std::to_string(FEDM::UsbManager::lastError())
+             + ", " + FEDM::UsbManager::lastErrorText());
         return FEDM_SHIM_ERR;
     }
 
     int found = 0;
+    int popped = 0;
     FEDM::Connector connector;
+    std::string seen;
     while (FEDM::UsbManager::readerCount() > 0) {
         FEDM::UsbScanInfo info = FEDM::UsbManager::popDiscover();
-        if (info.isValid() && info.isNewReader()) {
+        popped++;
+        if (!info.isValid()) {
+            continue;
+        }
+        seen += info.readerTypeToString() + "/" + info.deviceIdToHexString()
+             + " new=" + std::string(info.isNewReader() ? "1" : "0") + "; ";
+        if (info.isNewReader()) {
             connector = info.connector();
             found = 1;
             break;
@@ -158,7 +173,8 @@ extern "C" int fedm_connect_usb(void) {
     FEDM::UsbManager::stopDiscover();
 
     if (!found) {
-        setErr("no USB reader found");
+        setErr("no USB reader found (startDiscover=" + std::to_string(ret)
+             + ", popped=" + std::to_string(popped) + ", items: " + seen + ")");
         return FEDM_SHIM_NO_READER;
     }
     return createAndConnect(connector);

@@ -13,16 +13,14 @@ package main
 // The -Wl flags live here (not in the Makefile) so no shell ever expands $ORIGIN.
 //
 // Windows: the SDK (win-vc143-x64) is MSVC-ABI (MSVC name mangling,
-// 40-byte std::string), so the shim must be built with the MSVC ABI to
-// call it correctly. The supported build is MSVC (cl) on a Windows
-// machine with the 'msvc' build tag: see reader_msvc.go and
-// scripts/build-msvc.bat. With /MD (cl's default) the exe and the FEIG
-// DLLs share the same msvcp140.dll heap, so std::string objects returned
-// by the DLLs are safe to destroy here.
-// zig cannot do this from a Linux host: zig's x86_64-windows-msvc target
-// provides no MSVC libc, and the MinGW target has the wrong ABI (Itanium
-// mangling, 32-byte std::string). reader_zig.go keeps the zig (MinGW ABI)
-// flags for a hypothetical MinGW/clang (Itanium) build of the Windows SDK.
+// 40-byte std::string), so the shim must be built with the MSVC ABI.
+// The default build is a Linux cross compile with clang (make
+// build_windows, tag 'msvc', flags in reader_msvc.go); it needs the
+// one-time fedm/msvc-sysroot (scripts/collect-msvc-sysroot.bat on a
+// Windows box). MSVC (cl) on a Windows box: scripts/build-msvc.bat
+// (tag 'msvccl', flags in reader_cl.go). zig cannot emit the MSVC ABI
+// from Linux; reader_zig.go keeps MinGW-ABI flags for a hypothetical
+// MinGW/clang (Itanium) build of the Windows SDK.
 // -DFEDMDLL (both windows paths) selects the __declspec(dllexport)
 // branch of FedmBase.h (the consumer/dllimport branch is the #else),
 // which keeps references as plain symbols that the import lib thunks
@@ -31,8 +29,9 @@ package main
 /*
 #cgo linux CXXFLAGS: -I${SRCDIR}/../fedm/linux-x64/include -I${SRCDIR}/../fedm/linux-x64/include/fedm -g -Wall
 #cgo linux LDFLAGS: -L${SRCDIR}/../build -lfedm -lstdc++ -lpthread -Wl,-rpath-link,${SRCDIR}/../build -Wl,-rpath,$ORIGIN -Wl,--disable-new-dtags
-// windows #cgo flags live in reader_zig.go (tags: windows && !msvc) and
-// reader_msvc.go (tag: msvc)
+// windows #cgo flags live in reader_msvc.go (tag: msvc, clang cross
+// build), reader_cl.go (tag: msvccl, cl on Windows) and reader_zig.go
+// (tags: windows && !msvc && !msvccl, zig - needs a MinGW SDK build)
 #include <stdlib.h>
 #include "fedm_shim.h"
 */

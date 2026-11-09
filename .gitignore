@@ -1,2 +1,5 @@
 drivers/*
 build/*
+zig-out/
+fedm/msvc-sysroot/
+msvc-sysroot.zip

@@ -13,23 +13,34 @@ easy use by any browser app. In addition it allows for embedding any HTTP web pa
 
 ## Installation and Requirements
 
-- go version 1.21 or later
-- `make` and a C/C++ compiler toolchain (`gcc`/`g++` for linux x64)
+- zig 0.16 (primary build) plus `make`
+- go 1.21+ only for the legacy `build_go` / arm targets
 - The FEIG FEDM SDK, bundled under `./fedm`:
   - linux x64: headers `./fedm/linux-x64/include`, shared libraries `./fedm/linux-x64/bin/release`
   - windows x64 (VC++ 14.3): headers `./fedm/win-vc143-x64/include`, DLLs
     `./fedm/win-vc143-x64/bin/release`, import libraries `./fedm/win-vc143-x64/lib/release`
 
-For other platforms (arm, android) the corresponding FEDM SDK must be provided and the
-`#cgo CXXFLAGS`/`LDFLAGS` directives in `cmd/reader.go` adjusted accordingly.
+For other platforms (arm, android) the corresponding FEDM SDK must be provided
+and the `#cgo CXXFLAGS`/`LDFLAGS` directives in `cmd/reader.go` adjusted accordingly.
 
-To build for linux x64: run `make build`. The build installs the SDK shared libraries into `./build`
-(next to the binary, found at runtime via `$ORIGIN` rpath).
+To build for linux x64: run `make build`. This runs `zig build` (the C++ shim
+`cmd/fedm_shim.cpp` is compiled directly into the binary against the linux SDK)
+and stages the SDK shared libraries next to the binary in `zig-out/bin` (found
+at runtime via the `$ORIGIN` rpath - deploy `zig-out/bin` as a unit).
 
-To build for windows x64: run `make build_windows` (requires `zig`, used as the
-gcc-compatible cross toolchain via `zig cc`/`zig c++`). The SDK DLLs and import libraries
-are staged into `./build`, deploy it as a unit (Windows finds the DLLs next to the .exe).
-zig statically links its own C/C++ runtime, so no other runtime DLLs are needed.
+To build for windows x64: run `make build_windows` - a pure-Linux cross build
+with zig (`x86_64-windows-gnu`). The FEDM windows SDK is MSVC-ABI, so the C++
+shim is prebuilt **once** on a Windows box as `feigshim.dll` + `feigshim.lib`
+(plain C interface, safe to call across the ABI):
+
+1. on a Windows box with VS 2022 (C++ workload): `scripts\build-feigshim-windows.bat`
+2. copy the resulting `fedm\shim-windows\` back into the repo and commit it
+   (it is **not** gitignored - the cross build needs it)
+3. on Linux: `make build_windows`
+
+The zig build links `feigshim.lib` and stages the exe + `feigshim.dll` + the
+FEIG DLLs + the VC++ runtime DLLs into `zig-out/bin`; deploy that directory as
+a unit (Windows finds the DLLs next to the .exe).
 
 For BLE support the host needs a working Bluetooth Low Energy stack (BlueZ on Linux, built in on
 Windows). Note: the FEDM SDK 7.1.0 linux package does not include the FEBLE plugin library
