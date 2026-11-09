@@ -2,9 +2,9 @@
  * fedm_shim.cpp
  *
  * C++ implementation of the plain C interface in fedm_shim.h.
- * Wraps the FEIG FEDM C++ SDK (Fedm.h) for use from Go via cgo.
+ * Wraps the FEIG FEDM C++ SDK (Fedm.h) for use from the zig service.
  *
- * Threading model: the Go side serializes all reader operations with a
+ * Threading model: the zig side serializes all reader operations with a
  * mutex (one operation at a time on a Reader). The mutex below is a
  * backstop protecting the global state from the discovery threads.
  */

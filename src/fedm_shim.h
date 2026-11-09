@@ -3,8 +3,8 @@
  *
  * Plain C interface to the FEIG FEDM C++ SDK.
  *
- * This header is included from a Go cgo preamble, so it must stay
- * C-compatible (no C++ types in the exported signatures).
+ * This header is the plain C boundary used by the zig side, so it must
+ * stay C-compatible (no C++ types in the exported signatures).
  * The C++ implementation lives in fedm_shim.cpp.
  */
 #ifndef FEDM_SHIM_H

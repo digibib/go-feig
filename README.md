@@ -8,23 +8,19 @@ Short description: This is a service that exposes a simple API to communication 
 connected by USB, serial (COM), TCP or Bluetooth Low Energy (BLE). It is built on the FEIG FEDM C++
 SDK (`libfedm`) bundled under `./fedm`. It encompasses the operations to read and write tags and AFI
 alarm on ISO15693 transponders using a FEIG device. It also wraps an HTTP eventsource endpoint for
-easy use by any browser app. In addition it allows for embedding any HTTP web page if included under
-``./cmd/html` folder.
+easy use by any browser app. The bundled web UI is embedded at build time
+from `src/assets/index.html` and served at `/`.
 
 ## Installation and Requirements
 
 - zig 0.16 (primary build) plus `make`
-- go 1.21+ only for the legacy `build_go` / arm targets
 - The FEIG FEDM SDK, bundled under `./fedm`:
   - linux x64: headers `./fedm/linux-x64/include`, shared libraries `./fedm/linux-x64/bin/release`
   - windows x64 (VC++ 14.3): headers `./fedm/win-vc143-x64/include`, DLLs
     `./fedm/win-vc143-x64/bin/release`, import libraries `./fedm/win-vc143-x64/lib/release`
 
-For other platforms (arm, android) the corresponding FEDM SDK must be provided
-and the `#cgo CXXFLAGS`/`LDFLAGS` directives in `cmd/reader.go` adjusted accordingly.
-
 To build for linux x64: run `make build`. This runs `zig build` (the C++ shim
-`cmd/fedm_shim.cpp` is compiled directly into the binary against the linux SDK)
+`src/fedm_shim.cpp` is compiled directly into the binary against the linux SDK)
 and stages the SDK shared libraries next to the binary in `zig-out/bin` (found
 at runtime via the `$ORIGIN` rpath - deploy `zig-out/bin` as a unit).
 
@@ -76,7 +72,7 @@ Windows). Note: the FEDM SDK 7.1.0 linux package does not include the FEBLE plug
 Connection type is picked from the flags: BLE (`-bleMac`) > serial (`-comPort`) > TCP
 (`-axeHost`/`-axePort`) > USB (auto scan for a plugged reader, default).
 
-Application fires up a http server and mounts optional web content from ./html folder
+Application fires up a http server and serves the embedded web UI (src/assets/index.html)
 
 **API routes:**
 
