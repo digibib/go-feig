@@ -32,6 +32,8 @@ build: ## build linux x64 with zig (FEDM SDK, deploy unit in zig-out/bin)
 	# The shim is compiled with the system g++ (libstdc++ ABI, matching the
 	# SDK); zig only links the object. See build.zig for details.
 	g++ -O2 -fPIC -fexceptions -I $(FEDM_LNX)/include -I $(FEDM_LNX)/include/fedm -c src/fedm_shim.cpp -o ./build/fedm_shim.o
+	# TLS (OpenSSL) shim; dlopens libssl at runtime, see src/tls_shim.c
+	gcc -O2 -fPIC -c src/tls_shim.c -o ./build/tls_shim.o
 	test "$(LIBSTDCXX_A)" != "libstdc++.a" -a -f "$(LIBSTDCXX_A)" || { echo "ERROR: g++ cannot find its libstdc++.a (printed: '$(LIBSTDCXX_A)') - install libstdc++-dev"; exit 1; }
 	cp -f "$(LIBSTDCXX_A)" build/libstdc++.a
 	# stage the versioned .so's plus the SONAME (libfedm.so.7) and

@@ -1,5 +1,6 @@
 const std = @import("std");
 const logger = @import("logger.zig");
+const is_linux = @import("builtin").os.tag == .linux;
 const reader_mod = @import("reader.zig");
 const server = @import("server.zig");
 const inventory = @import("inventory.zig");
@@ -38,7 +39,7 @@ const usage: []const u8 =
     \\  -onlyOne            only one active /events/ subscriber (default true)
     \\  -port string        port of http API (default ":1667")
     \\  -tagStandard string tag content standard (default "dansk")
-    \\  -tls                use tls (not supported in the zig build)
+    \\  -tls                use tls (linux; cert.pem + key.pem in the current directory)
     \\  -wake               keep transponders awake, no tag content (default true)
     \\
 ;
@@ -175,7 +176,17 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (opts.debug) logger.debug_enabled = true;
-    if (opts.tls) argError("-tls is not supported in the zig build", .{});
+
+    var tls_enabled: bool = false;
+    if (opts.tls) {
+        if (!is_linux) argError("-tls is not supported on this platform (linux only)", .{});
+        // cert.pem and key.pem (PEM) from the current directory
+        if (!server.tlsInit("cert.pem", "key.pem")) {
+            argError("tls init failed: {s}", .{server.tlsLastError()});
+        }
+        tls_enabled = true;
+        logger.print("TLS enabled (cert.pem + key.pem)", .{});
+    }
 
     var reader = reader_mod.Reader.init(alloc, io);
 
@@ -209,7 +220,7 @@ pub fn main(init: std.process.Init) !void {
         logger.print("{s}", .{mw.slice()});
     }
 
-    var app = server.App.init(alloc, io, &reader, opts.wake, opts.only_one, opts.library) catch
+    var app = server.App.init(alloc, io, &reader, opts.wake, opts.only_one, opts.library, tls_enabled) catch
         std.debug.panic("failed to initialize app", .{});
 
     const reader_thread = try std.Thread.spawn(.{}, server.App.readerLoop, .{&app});

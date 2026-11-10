@@ -24,6 +24,15 @@ const is_linux = @import("builtin").os.tag == .linux;
 extern fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
 extern fn close(fd: c_int) c_int;
 extern fn setsockopt(fd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: c_uint) c_int;
+// TLS (OpenSSL shim, src/tls_shim.c, dlopens libssl at runtime); all
+// references sit behind is_linux branches or dead-on-windows fns
+extern fn tls_init(cert: [*]const u8, key: [*]const u8) c_int;
+extern fn tls_accept(fd: c_int) ?*anyopaque;
+extern fn tls_read(ssl: ?*anyopaque, buf: [*]u8, len: c_int) c_int;
+extern fn tls_write(ssl: ?*anyopaque, buf: [*]const u8, len: c_int) c_int;
+extern fn tls_free(ssl: ?*anyopaque) void;
+extern fn tls_last_error() [*]const u8;
+extern fn tls_last_err_code() c_int;
 
 fn sockWrite(fd: c_int, buf: [*]const u8, count: usize) isize {
     if (is_linux) {
@@ -60,6 +69,73 @@ fn rawWriteAll(fd: c_int, data: []const u8) bool {
         }
     }
     return true;
+}
+
+// TLS over http: the shim runs the handshake and the record layer;
+// on non-linux builds the is_linux branches below are dead, so the
+// tls_* externs are never compiled or linked.
+
+fn tlsFree(ssl: ?*anyopaque) void {
+    if (is_linux) {
+        if (ssl) |x| tls_free(x);
+    }
+}
+
+fn tlsWriteAll(ssl: *anyopaque, data: []const u8) bool {
+    if (!is_linux) return false;
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = tls_write(ssl, data[off..].ptr, @as(c_int, @intCast(data.len - off)));
+        if (n <= 0) return false;
+        off += @as(usize, @intCast(n));
+    }
+    return true;
+}
+
+// SSE frame write: TLS if the subscriber has a session, plain write(2) otherwise
+fn subWriteAll(s: *Subscriber, data: []const u8) bool {
+    if (is_linux) {
+        if (s.ssl) |ssl| {
+            return tlsWriteAll(ssl, data);
+        }
+    }
+    return rawWriteAll(s.fd, data);
+}
+
+pub fn tlsInit(cert: []const u8, key: []const u8) bool {
+    if (is_linux) {
+        return tls_init(cert.ptr, key.ptr) == 0;
+    } else {
+        return false;
+    }
+}
+
+pub fn tlsLastError() []const u8 {
+    if (is_linux) {
+        return std.mem.sliceTo(tls_last_error(), 0);
+    } else {
+        return "tls is not supported on this platform (linux only)";
+    }
+}
+
+fn tlsReason(code: u16) []const u8 {
+    return switch (code) {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        404 => "Not Found",
+        else => "Internal Server Error",
+    };
+}
+
+// CORS, same set as the Go server
+fn writeCors(w: anytype) !void {
+    _ = try w.write("Access-Control-Allow-Origin: *\r\n");
+    _ = try w.write("Access-Control-Allow-Methods: GET, POST, OPTIONS, PUT, DELETE\r\n");
+    _ = try w.write("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With\r\n");
+    _ = try w.write("Access-Control-Allow-Credentials: true\r\n");
+    _ = try w.write("Access-Control-Max-Age: 300\r\n");
+    _ = try w.write("Access-Control-Allow-Private-Network: true\r\n");
 }
 
 pub const VERSION = "2.0.0";
@@ -132,6 +208,8 @@ const Ring = struct {
 // the queue is shared with broadcast() under sse_mu.
 pub const Subscriber = struct {
     fd: c_int,
+    // TLS session for /events/ over TLS; owned by the delivery thread
+    ssl: ?*anyopaque = null,
     queue: Ring = .{},
     sent: bool = false,
     closing: bool = false,
@@ -169,29 +247,49 @@ fn dumpSelf(s: *Subscriber, where: []const u8) void {
 const Html = @embedFile("assets/index.html");
 
 // A pending HTTP response (std.http responses are one-shot; SSE
-// streams raw, bypassing this).
+// streams raw, bypassing this). Exactly one of req (plain, std.http)
+// or ssl (hand-rolled response through the OpenSSL shim) is set.
 const Resp = struct {
     self: *App,
-    req: *http.Server.Request,
+    req: ?*http.Server.Request = null,
+    ssl: ?*anyopaque = null,
 
     fn send(r: *const Resp, code: u16, ct: []const u8, body: []const u8) !void {
-        // CORS, same set as the Go server
-        var hdrs: [7]http.Header = undefined;
-        hdrs[0] = .{ .name = "Content-Type", .value = ct };
-        hdrs[1] = .{ .name = "Access-Control-Allow-Origin", .value = "*" };
-        hdrs[2] = .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, OPTIONS, PUT, DELETE" };
-        hdrs[3] = .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With" };
-        hdrs[4] = .{ .name = "Access-Control-Allow-Credentials", .value = "true" };
-        hdrs[5] = .{ .name = "Access-Control-Max-Age", .value = "300" };
-        hdrs[6] = .{ .name = "Access-Control-Allow-Private-Network", .value = "true" };
-        const status = switch (code) {
-            200 => http.Status.ok,
-            204 => http.Status.no_content,
-            400 => http.Status.bad_request,
-            404 => http.Status.not_found,
-            else => http.Status.internal_server_error,
-        };
-        try r.req.respond(body, .{ .status = status, .extra_headers = &hdrs });
+        if (r.req) |http_req| {
+            // CORS, same set as the Go server
+            var hdrs: [7]http.Header = undefined;
+            hdrs[0] = .{ .name = "Content-Type", .value = ct };
+            hdrs[1] = .{ .name = "Access-Control-Allow-Origin", .value = "*" };
+            hdrs[2] = .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, OPTIONS, PUT, DELETE" };
+            hdrs[3] = .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With" };
+            hdrs[4] = .{ .name = "Access-Control-Allow-Credentials", .value = "true" };
+            hdrs[5] = .{ .name = "Access-Control-Max-Age", .value = "300" };
+            hdrs[6] = .{ .name = "Access-Control-Allow-Private-Network", .value = "true" };
+            const status = switch (code) {
+                200 => http.Status.ok,
+                204 => http.Status.no_content,
+                400 => http.Status.bad_request,
+                404 => http.Status.not_found,
+                else => http.Status.internal_server_error,
+            };
+            try http_req.respond(body, .{ .status = status, .extra_headers = &hdrs });
+            return;
+        }
+        return r.sendTls(code, ct, body);
+    }
+
+    // TLS path: std.http needs the net vtable, which only the main
+    // thread can drive, so the response is hand-rolled through the shim.
+    fn sendTls(r: *const Resp, code: u16, ct: []const u8, body: []const u8) !void {
+        var hbuf: [1024]u8 = undefined;
+        var mw = inventory.MemWriter{ .buf = hbuf[0..], .alloc = r.self.gpa };
+        try mw.print("HTTP/1.1 {d} {s}\r\n", .{ code, tlsReason(code) });
+        try mw.print("Content-Type: {s}\r\n", .{ct});
+        try writeCors(&mw);
+        try mw.print("Content-Length: {d}\r\n", .{body.len});
+        try mw.write("Connection: close\r\n\r\n");
+        if (!tlsWriteAll(r.ssl.?, mw.slice())) return error.TlsWriteFailed;
+        if (body.len > 0 and !tlsWriteAll(r.ssl.?, body)) return error.TlsWriteFailed;
     }
 };
 
@@ -206,6 +304,7 @@ pub const App = struct {
     keep_transponders_awake: bool,
     only_one_active: bool,
     library: []const u8,
+    tls_enabled: bool,
     start_ts: std.Io.Timestamp,
     my_ip: []const u8,
     // protects inventory and mode
@@ -216,7 +315,7 @@ pub const App = struct {
     // thread drains each queue onto its socket (raw write(2))
     sse_clients: std.ArrayList(*Subscriber),
 
-    pub fn init(alloc: std.mem.Allocator, io: std.Io, r: *reader_mod.Reader, wake: bool, only_one: bool, library: []const u8) !Self {
+    pub fn init(alloc: std.mem.Allocator, io: std.Io, r: *reader_mod.Reader, wake: bool, only_one: bool, library: []const u8, tls_enabled: bool) !Self {
         var a: Self = .{
             .gpa = alloc,
             .io = io,
@@ -225,6 +324,7 @@ pub const App = struct {
             .keep_transponders_awake = wake,
             .only_one_active = only_one,
             .library = library,
+            .tls_enabled = tls_enabled,
             .start_ts = std.Io.Clock.awake.now(io),
             .my_ip = getMyIp(io, alloc),
             .sse_clients = .empty,
@@ -370,16 +470,17 @@ pub const App = struct {
     // /events/: register a subscriber. The delivery thread sends the
     // headers and events on the socket; from here the connection
     // belongs to it, so main must not close it.
-    fn sseSubscribe(self: *Self, conn: std.Io.net.Stream) void {
+    fn sseSubscribe(self: *Self, conn: std.Io.net.Stream, ssl: ?*anyopaque) void {
         // the socket handle is a raw fd (int) on linux, a pointer
         // value (SOCKET) on windows
         const fd: c_int = if (is_linux) conn.socket.handle else @as(c_int, @intCast(@intFromPtr(conn.socket.handle)));
         const s = self.gpa.create(Subscriber) catch {
+            tlsFree(ssl);
             _ = sockClose(fd);
             return;
         };
         // explicit full init: create() does not guarantee zeroed memory
-        s.* = .{ .fd = fd };
+        s.* = .{ .fd = fd, .ssl = ssl };
         // a disconnecting client must not take the process down with
         // SIGPIPE (SOL_SOCKET, SO_NOSIGNAL - linux)
         if (is_linux) {
@@ -387,6 +488,7 @@ pub const App = struct {
             _ = setsockopt(fd, 1, 26, &on, 4);
         }
         self.sse_mu.lock(self.io) catch {
+            tlsFree(s.ssl);
             _ = sockClose(s.fd);
             self.gpa.destroy(s);
             return;
@@ -394,6 +496,7 @@ pub const App = struct {
         if (self.only_one_active) self.killSubscribersLocked();
         self.sse_clients.append(self.gpa, s) catch {
             self.sse_mu.unlock(self.io);
+            tlsFree(s.ssl); // never registered: we own it
             _ = sockClose(s.fd); // never registered: we own it
             self.gpa.destroy(s);
             return;
@@ -467,7 +570,7 @@ pub const App = struct {
                     self.subscriberGone(s);
                     continue;
                 }
-                if (!rawWriteAll(s.fd, mw.slice())) {
+                if (!subWriteAll(s, mw.slice())) {
                     self.subscriberGone(s);
                     continue;
                 }
@@ -491,7 +594,7 @@ pub const App = struct {
                 }
                 const ev = m.event;
                 const da = m.data;
-                if (!rawWriteAll(s.fd, mw.slice())) {
+                if (!subWriteAll(s, mw.slice())) {
                     self.gpa.free(ev);
                     self.gpa.free(da);
                     self.gpa.destroy(m);
@@ -505,7 +608,7 @@ pub const App = struct {
             } else if (now - s.last_write > @as(i96, 15_000_000_000)) {
                 // 15s without data: an SSE comment keeps proxies alive
                 // and detects a dead peer (write fails -> gone)
-                if (!rawWriteAll(s.fd, ": ping\n\n")) self.subscriberGone(s);
+                if (!subWriteAll(s, ": ping\n\n")) self.subscriberGone(s);
             }
         }
     }
@@ -530,6 +633,7 @@ pub const App = struct {
             self.gpa.free(m.data);
             self.gpa.destroy(m);
         }
+        tlsFree(s.ssl);
         _ = sockClose(s.fd);
         self.gpa.destroy(s);
     }
@@ -564,6 +668,12 @@ pub const App = struct {
     }
 
     fn handleConnection(self: *Self, conn: std.Io.net.Stream) void {
+        if (is_linux) {
+            if (self.tls_enabled) {
+                self.handleTlsConnection(conn);
+                return;
+            }
+        }
         var recvBuf: [8192]u8 = undefined;
         var sendBuf: [4096]u8 = undefined;
         var reader = conn.reader(self.io, &recvBuf);
@@ -580,24 +690,77 @@ pub const App = struct {
         var path = req.head.target;
         if (std.mem.indexOfScalar(u8, path, '?')) |qi| path = path[0..qi];
         if (std.mem.eql(u8, path, "/events/")) {
-            self.sseSubscribe(conn);
+            self.sseSubscribe(conn, null);
             return;
         }
-        self.route(&req) catch {};
+        var r = Resp{ .self = self, .req = &req };
+        self.route(@tagName(req.head.method), req.head.target, &r) catch {};
         conn.close(self.io);
     }
 
-    fn route(self: *Self, req: *http.Server.Request) !void {
-        var path = req.head.target;
+    // TLS variant of handleConnection: the handshake runs on the main
+    // thread over the accepted blocking fd, and the head is read with
+    // tls_read (std.http needs the net vtable, main thread only).
+    fn handleTlsConnection(self: *Self, conn: std.Io.net.Stream) void {
+        const fd: c_int = if (is_linux) conn.socket.handle else @as(c_int, @intCast(@intFromPtr(conn.socket.handle)));
+        if (tls_accept(fd)) |ssl| {
+            var on: c_int = 1; // SO_NOSIGNAL (SOL_SOCKET)
+            _ = setsockopt(fd, 1, 26, &on, 4);
+            if (self.tlsHeadAndRoute(conn, ssl)) return;
+            tls_free(ssl);
+            conn.close(self.io);
+        } else {
+            logger.print("TLS handshake failed: {s} (code {d})", .{ tlsLastError(), tls_last_err_code() });
+            conn.close(self.io);
+        }
+    }
+
+    // Returns true only for /events/ (the delivery thread then owns
+    // both the socket and the SSL session).
+    fn tlsHeadAndRoute(self: *Self, conn: std.Io.net.Stream, ssl: *anyopaque) bool {
+        var recvBuf: [8192]u8 = undefined;
+        var headLen: usize = 0;
+        var headEnd: ?usize = null;
+        while (headEnd == null) {
+            var chunk: [2048]u8 = undefined;
+            const n = tls_read(ssl, chunk[0..].ptr, @as(c_int, @intCast(chunk.len)));
+            if (n <= 0) {
+                logger.debugPrint("TLS HEAD READ FAILED: {s} (code {d})", .{ tlsLastError(), tls_last_err_code() });
+                return false;
+            }
+            const got = @as(usize, @intCast(n));
+            if (headLen + got > recvBuf.len) return false;
+            @memcpy(recvBuf[headLen .. headLen + got], chunk[0..got]);
+            headLen += got;
+            headEnd = std.mem.indexOf(u8, recvBuf[0..headLen], "\r\n\r\n");
+        }
+        const head = recvBuf[0..headEnd.?];
+        const lineEnd = std.mem.indexOf(u8, head, "\r\n") orelse return false;
+        var parts = std.mem.splitScalar(u8, head[0..lineEnd], ' ');
+        const method = parts.next() orelse return false;
+        const target = parts.next() orelse return false;
+        if (target.len == 0 or target[0] != '/') return false;
+        var path = target;
+        if (std.mem.indexOfScalar(u8, path, '?')) |qi| path = path[0..qi];
+        if (std.mem.eql(u8, path, "/events/")) {
+            self.sseSubscribe(conn, ssl);
+            return true;
+        }
+        var r = Resp{ .self = self, .ssl = ssl };
+        self.route(method, target, &r) catch {};
+        return false;
+    }
+
+    fn route(self: *Self, method: []const u8, target: []const u8, r: *Resp) !void {
+        var path = target;
         var query: []const u8 = "";
         if (std.mem.indexOfScalar(u8, path, '?')) |qi| {
             path = path[0..qi];
             query = path[qi + 1 ..];
         }
-        logger.debugPrint("HTTP {s} {s}", .{ @tagName(req.head.method), path });
+        logger.debugPrint("HTTP {s} {s}", .{ method, path });
 
-        const r = Resp{ .self = self, .req = req };
-        if (std.mem.eql(u8, @tagName(req.head.method), "OPTIONS")) {
+        if (std.mem.eql(u8, method, "OPTIONS")) {
             return r.send(204, "text/plain", "");
         }
         if (std.mem.eql(u8, path, "/.status")) {
@@ -606,7 +769,7 @@ pub const App = struct {
             if (!self.statusJson(&mw)) return r.send(500, "text/plain", "json error");
             return r.send(200, "application/json", mw.slice());
         }
-        if (std.mem.eql(u8, path, "/scan")) return self.handleScan(&r);
+        if (std.mem.eql(u8, path, "/scan")) return self.handleScan(r);
         if (std.mem.eql(u8, path, "/start")) {
             self.mu.lock(self.io) catch {};
             self.mode = .scan;
@@ -619,26 +782,16 @@ pub const App = struct {
             self.mu.unlock(self.io);
             return r.send(200, "text/plain", "");
         }
-        if (std.mem.eql(u8, path, "/write")) return self.handleWrite(&r, query);
-        if (std.mem.eql(u8, path, "/writetagbarcode")) return self.handleWriteTagBarcode(&r, query);
-        if (std.mem.eql(u8, path, "/alarmOff")) return self.handleAlarm(&r, 0xc2, "Failed turning off alarm");
-        if (std.mem.eql(u8, path, "/alarmOn")) return self.handleAlarm(&r, 0x07, "Failed activating alarm");
-        if (std.mem.eql(u8, path, "/ble/scan")) return self.handleBleScan(&r);
-        if (std.mem.eql(u8, path, "/ble/stop")) return self.handleBleStop(&r);
+        if (std.mem.eql(u8, path, "/write")) return self.handleWrite(r, query);
+        if (std.mem.eql(u8, path, "/writetagbarcode")) return self.handleWriteTagBarcode(r, query);
+        if (std.mem.eql(u8, path, "/alarmOff")) return self.handleAlarm(r, 0xc2, "Failed turning off alarm");
+        if (std.mem.eql(u8, path, "/alarmOn")) return self.handleAlarm(r, 0x07, "Failed activating alarm");
+        if (std.mem.eql(u8, path, "/ble/scan")) return self.handleBleScan(r);
+        if (std.mem.eql(u8, path, "/ble/stop")) return self.handleBleStop(r);
         if (std.mem.eql(u8, path, "/html/index.html") or std.mem.eql(u8, path, "/html/") or std.mem.eql(u8, path, "/")) {
             return r.send(200, "text/html; charset=utf-8", Html);
         }
         return r.send(404, "text/plain", "404 page not found");
-    }
-
-    // CORS, same set as the Go server
-    fn writeCors(w: anytype) !void {
-        _ = try w.write("Access-Control-Allow-Origin: *\r\n");
-        _ = try w.write("Access-Control-Allow-Methods: GET, POST, OPTIONS, PUT, DELETE\r\n");
-        _ = try w.write("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With\r\n");
-        _ = try w.write("Access-Control-Allow-Credentials: true\r\n");
-        _ = try w.write("Access-Control-Max-Age: 300\r\n");
-        _ = try w.write("Access-Control-Allow-Private-Network: true\r\n");
     }
 
     fn queryParam(self: *Self, query: []const u8, name: []const u8) ?[]const u8 {

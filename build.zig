@@ -40,6 +40,8 @@ pub fn build(b: *std.Build) void {
         // 'make build' compiles build/fedm_shim.o before 'zig build'; if
         // it is missing, the link fails with a file-not-found here.
         feigModule.addObjectFile(b.path("build/fedm_shim.o"));
+        // TLS (OpenSSL) shim; dlopens libssl at runtime, so no -lssl
+        feigModule.addObjectFile(b.path("build/tls_shim.o"));
         // The shim's C++ runtime: zig's linkSystemLibrary("stdc++") links
         // zig's own bundled libc++ (a different std::string ABI than the
         // SDK's libstdc++), so the shim's libstdc++ symbols are resolved
