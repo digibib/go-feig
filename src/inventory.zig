@@ -1,7 +1,9 @@
 const std = @import("std");
 
-// Tag data model, Dansk standard tag content and CRC16 (port of the
-// original Go implementation). JSON field names mirror the Go structs exactly.
+// Tag data model, tag content standards and CRC16 (port of the
+// original Go implementation). JSON field names mirror the Go structs
+// exactly. The active content standard is selected with -tagStandard
+// (see TagStandard below).
 
 pub const CCITT_REVERSED = 0x1021;
 
@@ -181,35 +183,77 @@ pub const TagContent = struct {
         alloc.free(self.country);
         alloc.free(self.library);
     }
-
-    // Tag content following Dansk standard (36 bytes):
-    // [0] version(4bit) + type(4bit)
-    // [1] sequence number
-    // [2] number of items
-    // [3:19]  barcode (16 bytes)
-    // [19:21] CRC of bytes 0-18 and 21-33
-    // [21:23] country
-    // [23:32] library
-    pub fn toBytes(self: *const TagContent, alloc: std.mem.Allocator) ![]u8 {
-        var bs: [36]u8 = undefined;
-        @memset(bs[0..], 0);
-        bs[0] = 0x11; // 17 (4bit version, 4bit type)
-        bs[1] = self.num_items;
-        bs[2] = self.seq_num;
-        @memcpy(bs[3..19], self.barcode);
-        @memcpy(bs[21..23], self.country);
-        @memcpy(bs[23..32], self.library);
-        // crc over bytes 0-18 and 21-33 (the crc field itself is skipped)
-        var csum: [32]u8 = undefined;
-        @memset(csum[0..], 0);
-        @memcpy(csum[0..19], bs[0..19]);
-        @memcpy(csum[19..32], bs[21..34]);
-        const crc = crc16(csum[0..]);
-        bs[19] = crc[0];
-        bs[20] = crc[1];
-        return alloc.dupe(u8, bs[0..]);
-    }
 };
+
+// A tag standard defines how tag content is laid out on the tag: parsing
+// raw tag bytes into a TagContent and encoding it back. The active
+// standard is selected at startup with -tagStandard (main.zig). To
+// support another standard, write a parse/encode pair and register it in
+// tagStandards below.
+pub const TagStandard = struct {
+    name: []const u8,
+    // Raw tag bytes the standard occupies (a multiple of 4 - one
+    // ISO15693 data block).
+    contentLen: usize,
+    parse: *const fn (alloc: std.mem.Allocator, bs: []const u8) error{PrepareReadTagBytes, NotEnoughTagContentBytes, OutOfMemory}!TagContent,
+    encode: *const fn (tc: *const TagContent, alloc: std.mem.Allocator) error{OutOfMemory}![]u8,
+};
+
+// Registry of known tag standards. The first entry is the default.
+const tagStandards = [_]TagStandard{
+    .{ .name = "dansk", .contentLen = 36, .parse = danskParse, .encode = danskEncode },
+};
+
+pub fn tagStandardByName(name: []const u8) ?TagStandard {
+    for (tagStandards) |ts| {
+        if (std.mem.eql(u8, ts.name, name)) return ts;
+    }
+    return null;
+}
+
+// The active tag standard, selected at startup. Written once on the main
+// thread before any worker thread is spawned.
+pub var current: TagStandard = tagStandards[0];
+
+// Comma-separated registered standard names, for error messages.
+pub const availableStandards: []const u8 = blk: {
+    var s: []const u8 = "";
+    var first = true;
+    for (tagStandards) |ts| {
+        if (!first) s = s ++ ",";
+        first = false;
+        s = s ++ ts.name;
+    }
+    break :blk s;
+};
+
+// Tag content following Dansk standard (36 bytes):
+// [0] version(4bit) + type(4bit)
+// [1] sequence number
+// [2] number of items
+// [3:19]  barcode (16 bytes)
+// [19:21] CRC of bytes 0-18 and 21-33
+// [21:23] country
+// [23:32] library
+pub fn danskEncode(tc: *const TagContent, alloc: std.mem.Allocator) error{OutOfMemory}![]u8 {
+    var bs: [36]u8 = undefined;
+    @memset(bs[0..], 0);
+    bs[0] = 0x11; // 17 (4bit version, 4bit type)
+    bs[1] = tc.num_items;
+    bs[2] = tc.seq_num;
+    @memcpy(bs[3..19], tc.barcode);
+    @memcpy(bs[21..23], tc.country);
+    @memcpy(bs[23..32], tc.library);
+    // crc over bytes 0-18 and 21-33 (the crc field itself is skipped)
+    var csum: [32]u8 = undefined;
+    @memset(csum[0..], 0);
+    @memcpy(csum[0..19], bs[0..19]);
+    @memcpy(csum[19..32], bs[21..34]);
+    const crc = crc16(csum[0..]);
+    bs[19] = crc[0];
+    bs[20] = crc[1];
+    return alloc.dupe(u8, bs[0..]);
+}
 
 // Tags are exactly 10 bytes on the wire (see FedmTag)
 pub const Tag = struct {
@@ -249,7 +293,7 @@ pub const Tag = struct {
 // Parse the Dansk standard layout read from a tag (port of newTagContent).
 // The FEDM SDK returns the read data blocks in memory order, which is the
 // Dansk standard layout itself, no transformation needed.
-pub fn newTagContent(alloc: std.mem.Allocator, bs: []const u8) !TagContent {
+pub fn danskParse(alloc: std.mem.Allocator, bs: []const u8) error{PrepareReadTagBytes, NotEnoughTagContentBytes, OutOfMemory}!TagContent {
     if (bs.len < 4 or bs.len % 4 != 0) return error.PrepareReadTagBytes;
     if (bs.len < 32) return error.NotEnoughTagContentBytes;
     var tc = TagContent{

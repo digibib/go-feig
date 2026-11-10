@@ -278,7 +278,7 @@ pub const App = struct {
                 self.reader.read_tag_fail += 1;
                 continue;
             };
-            const tc = inventory.newTagContent(self.gpa, data) catch {
+            const tc = inventory.current.parse(self.gpa, data) catch {
                 self.gpa.free(data);
                 logger.debugPrint("ERROR PROCESSING TAG DATA", .{});
                 self.reader.read_tag_fail += 1;

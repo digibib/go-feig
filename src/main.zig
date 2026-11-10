@@ -13,6 +13,7 @@ const Options = struct {
     only_one: bool = true,
     tls: bool = false,
     library: []const u8 = "02030000",
+    tag_standard: []const u8 = "dansk",
     axe_host: []const u8 = "",
     axe_port: u16 = 0,
     ble_mac: []const u8 = "",
@@ -21,6 +22,34 @@ const Options = struct {
     com_baud: u32 = 38400,
     debug: bool = false,
 };
+
+// Usage text, shown on any command line error.
+const usage: []const u8 =
+    \\Usage: feig [options]
+    \\
+    \\  -axeHost string     host of feiging axe (tcp)
+    \\  -axePort int        port of feiging axe
+    \\  -bleMac string      MAC address of BLE reader (e.g. AA:BB:CC:DD:EE:FF)
+    \\  -comPort string     serial port of reader (e.g. /dev/ttyUSB0)
+    \\  -comFrame string    serial byte frame (8E1 | 8N1 | 8O1) (default "8E1")
+    \\  -comBaud int        serial baudrate (default 38400)
+    \\  -debug              turn on verbose logging
+    \\  -library string     library ISIL number (default "02030000")
+    \\  -onlyOne            only one active /events/ subscriber (default true)
+    \\  -port string        port of http API (default ":1667")
+    \\  -tagStandard string tag content standard (default "dansk")
+    \\  -tls                use tls (not supported in the zig build)
+    \\  -wake               keep transponders awake, no tag content (default true)
+    \\
+;
+
+// Report an argument error with the usage text and exit non-zero. Arg
+// errors never panic.
+fn argError(comptime fmt: []const u8, args: anytype) noreturn {
+    logger.print("ERROR: " ++ fmt, args);
+    logger.print("{s}", .{usage});
+    std.process.exit(1);
+}
 
 fn isBoolFlag(name: []const u8) bool {
     return std.mem.eql(u8, name, "wake") or
@@ -41,14 +70,14 @@ fn parseBool(name: []const u8, s: []const u8) bool {
     {
         return false;
     }
-    std.debug.panic("invalid boolean value for -{s}: '{s}'", .{ name, s });
+    argError("invalid boolean value for -{s}: '{s}'", .{ name, s });
 }
 
 fn parseUint(comptime T: type, name: []const u8, s: []const u8) T {
     // -port also accepts the go style ":1667"
     const rest = if (std.mem.startsWith(u8, s, ":")) s[1..] else s;
     return std.fmt.parseInt(T, rest, 10) catch
-        std.debug.panic("invalid number for -{s}: '{s}'", .{ name, s });
+        argError("invalid number for -{s}: '{s}'", .{ name, s });
 }
 
 fn dupeStr(alloc: std.mem.Allocator, s: []const u8) []const u8 {
@@ -73,6 +102,8 @@ fn setOption(alloc: std.mem.Allocator, opts: *Options, name: []const u8, value: 
         opts.debug = parseBool(name, value);
     } else if (std.mem.eql(u8, name, "library")) {
         opts.library = dupeStr(alloc, value);
+    } else if (std.mem.eql(u8, name, "tagStandard")) {
+        opts.tag_standard = dupeStr(alloc, value);
     } else if (std.mem.eql(u8, name, "axeHost")) {
         opts.axe_host = dupeStr(alloc, value);
     } else if (std.mem.eql(u8, name, "bleMac")) {
@@ -82,7 +113,7 @@ fn setOption(alloc: std.mem.Allocator, opts: *Options, name: []const u8, value: 
     } else if (std.mem.eql(u8, name, "comFrame")) {
         opts.com_frame = dupeStr(alloc, value);
     } else {
-        std.debug.panic("unknown flag -{s}", .{name});
+        argError("unknown flag -{s}", .{name});
     }
 }
 
@@ -104,7 +135,7 @@ fn parseArgs(alloc: std.mem.Allocator, args: []const []const u8, opts: *Options)
                 value = "true";
             } else {
                 i += 1;
-                if (i >= args.len) std.debug.panic("flag -{s} requires a value", .{name});
+                if (i >= args.len) argError("flag -{s} requires a value", .{name});
                 value = args[i];
             }
         }
@@ -136,8 +167,15 @@ pub fn main(init: std.process.Init) !void {
     var opts: Options = .{};
     parseArgs(alloc, args, &opts);
 
+    if (inventory.tagStandardByName(opts.tag_standard)) |ts| {
+        inventory.current = ts;
+        logger.print("Tag standard: {s}", .{ts.name});
+    } else {
+        argError("unknown -tagStandard '{s}' (available: {s})", .{ opts.tag_standard, inventory.availableStandards });
+    }
+
     if (opts.debug) logger.debug_enabled = true;
-    if (opts.tls) std.debug.panic("-tls is not supported in the zig build", .{});
+    if (opts.tls) argError("-tls is not supported in the zig build", .{});
 
     var reader = reader_mod.Reader.init(alloc, io);
 

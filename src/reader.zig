@@ -104,6 +104,8 @@ pub fn pluginLoadHint(alloc: std.mem.Allocator, s: []const u8) []const u8 {
 }
 
 const maxTagsPerInventory = 256;
+// Raw tag content buffer: must cover the largest registered tag
+// standard (inventory.current.contentLen).
 const tagContentBytes = 36; // 9 blocks x 4 bytes
 
 // Reader wraps the FEIG FEDM SDK (via the shim). All methods take the
@@ -307,9 +309,9 @@ pub const Reader = struct {
         self.mu.lock(self.io) catch return error.LockFailed;
         defer self.mu.unlock(self.io);
         tag.content.barcode = barcode;
-        const bs = try tag.content.toBytes(self.alloc);
+        const bs = try inventory.current.encode(&tag.content, self.alloc);
         defer self.alloc.free(bs);
-        if (bs.len != tagContentBytes) return error.WrongContentLength;
+        if (bs.len != inventory.current.contentLen) return error.WrongContentLength;
         try self.doWriteTagContent(&tag.id, bs);
         self.write_tag_succ += 1;
         app.mu.lock(app.io) catch {};
@@ -348,7 +350,7 @@ pub const Reader = struct {
                 .country = "NO", // hard coded for now
                 .library = app.library,
             };
-            const bs = try tags[i].content.toBytes(self.alloc);
+            const bs = try inventory.current.encode(&tags[i].content, self.alloc);
             self.mu.lock(self.io) catch {
                 self.alloc.free(bs);
                 return error.LockFailed;

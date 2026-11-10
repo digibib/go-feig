@@ -61,10 +61,14 @@ Windows). Note: the FEDM SDK 7.1.0 linux package does not include the FEBLE plug
         turn on verbose logging
   -library string
         library ISIL number (default "02030000")
+  -onlyOne
+        only one active /events/ subscriber (default true)
   -port string
         port of http API (default ":1667")
+  -tagStandard string
+        tag content standard (default "dansk")
   -tls
-        use tls, read cert.pem and key.pem from same folder
+        use tls (not supported in the zig build)
   -wake
         Keep inventory state and keep all transponders awake, will not be able to read tag content (default true)
 ```
