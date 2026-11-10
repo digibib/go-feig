@@ -45,6 +45,10 @@ Windows). Note: the FEDM SDK 7.1.0 linux package does not include the FEBLE plug
 ## Usage
 
 ```
+  -apiToken string
+        API token; when set, all endpoints require "Authorization:
+        Bearer <token>" except /events/, which takes it as the query
+        parameter ?apiToken=<token> (EventSource cannot send headers)
   -axeHost string
         host of feiging axe (tcp)
   -axePort int

@@ -13,6 +13,7 @@ const Options = struct {
     wake: bool = true,
     only_one: bool = true,
     tls: bool = false,
+    api_token: []const u8 = "",
     library: []const u8 = "02030000",
     tag_standard: []const u8 = "dansk",
     axe_host: []const u8 = "",
@@ -28,6 +29,7 @@ const Options = struct {
 const usage: []const u8 =
     \\Usage: feig [options]
     \\
+    \\  -apiToken string   API token; when set, all endpoints need "Authorization: Bearer <token>" (/events/: ?apiToken=)
     \\  -axeHost string     host of feiging axe (tcp)
     \\  -axePort int        port of feiging axe
     \\  -bleMac string      MAC address of BLE reader (e.g. AA:BB:CC:DD:EE:FF)
@@ -87,7 +89,9 @@ fn dupeStr(alloc: std.mem.Allocator, s: []const u8) []const u8 {
 }
 
 fn setOption(alloc: std.mem.Allocator, opts: *Options, name: []const u8, value: []const u8) void {
-    if (std.mem.eql(u8, name, "port")) {
+    if (std.mem.eql(u8, name, "apiToken")) {
+        opts.api_token = dupeStr(alloc, value);
+    } else if (std.mem.eql(u8, name, "port")) {
         opts.port = parseUint(u16, name, value);
     } else if (std.mem.eql(u8, name, "axePort")) {
         opts.axe_port = parseUint(u16, name, value);
@@ -220,7 +224,7 @@ pub fn main(init: std.process.Init) !void {
         logger.print("{s}", .{mw.slice()});
     }
 
-    var app = server.App.init(alloc, io, &reader, opts.wake, opts.only_one, opts.library, tls_enabled) catch
+    var app = server.App.init(alloc, io, &reader, opts.wake, opts.only_one, opts.library, tls_enabled, opts.api_token) catch
         std.debug.panic("failed to initialize app", .{});
 
     const reader_thread = try std.Thread.spawn(.{}, server.App.readerLoop, .{&app});

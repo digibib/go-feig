@@ -123,6 +123,7 @@ fn tlsReason(code: u16) []const u8 {
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         else => "Internal Server Error",
     };
@@ -136,6 +137,70 @@ fn writeCors(w: anytype) !void {
     _ = try w.write("Access-Control-Allow-Credentials: true\r\n");
     _ = try w.write("Access-Control-Max-Age: 300\r\n");
     _ = try w.write("Access-Control-Allow-Private-Network: true\r\n");
+}
+
+// ---------- API token ----------
+// When -apiToken is set, every endpoint requires
+// "Authorization: Bearer <token>" except /events/, which takes it as
+// the query parameter apiToken= (browser EventSource cannot send
+// headers).
+
+fn fold(c: u8) u8 {
+    return if (c >= 'A' and c <= 'Z') c + 32 else c;
+}
+
+// case-insensitive equality
+fn eqFold(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |c, i| {
+        if (fold(c) != fold(b[i])) return false;
+    }
+    return true;
+}
+
+// constant-time compare (the token is a secret)
+fn tokenEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var diff: u8 = 0;
+    for (a, 0..) |c, i| diff |= c ^ b[i];
+    return diff == 0;
+}
+
+// Plain path: iterate the parsed request headers (RFC 7235: scheme
+// case-insensitive)
+fn bearerMatches(req: *http.Server.Request, token: []const u8) bool {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (!eqFold(h.name, "authorization")) continue;
+        var v = h.value;
+        while (v.len > 0 and v[0] == ' ') v = v[1..];
+        if (v.len < 8 or v[6] != ' ' or !eqFold(v[0..6], "bearer")) continue;
+        if (tokenEqual(v[7..], token)) return true;
+    }
+    return false;
+}
+
+// TLS path: scan the raw head (no std.http there)
+fn rawBearerMatches(head: []const u8, token: []const u8) bool {
+    if (rawHeadBearer(head)) |t| return tokenEqual(t, token);
+    return false;
+}
+
+fn rawHeadBearer(head: []const u8) ?[]const u8 {
+    var rest = head;
+    while (std.mem.indexOf(u8, rest, "\r\n")) |eol| {
+        if (lineBearer(rest[0..eol])) |t| return t;
+        rest = rest[eol + 2 ..];
+    }
+    return lineBearer(rest);
+}
+
+fn lineBearer(line: []const u8) ?[]const u8 {
+    if (line.len < 15 or !eqFold(line[0..14], "authorization:")) return null;
+    var v = line[14..];
+    while (v.len > 0 and v[0] == ' ') v = v[1..];
+    if (v.len < 8 or v[6] != ' ' or !eqFold(v[0..6], "bearer")) return null;
+    return v[7..];
 }
 
 pub const VERSION = "2.0.0";
@@ -256,7 +321,9 @@ const Resp = struct {
 
     fn send(r: *const Resp, code: u16, ct: []const u8, body: []const u8) !void {
         if (r.req) |http_req| {
-            // CORS, same set as the Go server
+            // CORS, same set as the Go server; extra_headers wants a
+            // pointer to a fixed array, so the 401 case copies into an
+            // 8-slot array to add WWW-Authenticate
             var hdrs: [7]http.Header = undefined;
             hdrs[0] = .{ .name = "Content-Type", .value = ct };
             hdrs[1] = .{ .name = "Access-Control-Allow-Origin", .value = "*" };
@@ -269,10 +336,18 @@ const Resp = struct {
                 200 => http.Status.ok,
                 204 => http.Status.no_content,
                 400 => http.Status.bad_request,
+                401 => http.Status.unauthorized,
                 404 => http.Status.not_found,
                 else => http.Status.internal_server_error,
             };
-            try http_req.respond(body, .{ .status = status, .extra_headers = &hdrs });
+            if (code == 401) {
+                var h8: [8]http.Header = undefined;
+                for (hdrs, 0..) |h, i| h8[i] = h;
+                h8[7] = .{ .name = "WWW-Authenticate", .value = "Bearer" };
+                try http_req.respond(body, .{ .status = status, .extra_headers = &h8 });
+            } else {
+                try http_req.respond(body, .{ .status = status, .extra_headers = &hdrs });
+            }
             return;
         }
         return r.sendTls(code, ct, body);
@@ -285,6 +360,7 @@ const Resp = struct {
         var mw = inventory.MemWriter{ .buf = hbuf[0..], .alloc = r.self.gpa };
         try mw.print("HTTP/1.1 {d} {s}\r\n", .{ code, tlsReason(code) });
         try mw.print("Content-Type: {s}\r\n", .{ct});
+        if (code == 401) try mw.write("WWW-Authenticate: Bearer\r\n");
         try writeCors(&mw);
         try mw.print("Content-Length: {d}\r\n", .{body.len});
         try mw.write("Connection: close\r\n\r\n");
@@ -305,6 +381,7 @@ pub const App = struct {
     only_one_active: bool,
     library: []const u8,
     tls_enabled: bool,
+    api_token: []const u8,
     start_ts: std.Io.Timestamp,
     my_ip: []const u8,
     // protects inventory and mode
@@ -315,7 +392,7 @@ pub const App = struct {
     // thread drains each queue onto its socket (raw write(2))
     sse_clients: std.ArrayList(*Subscriber),
 
-    pub fn init(alloc: std.mem.Allocator, io: std.Io, r: *reader_mod.Reader, wake: bool, only_one: bool, library: []const u8, tls_enabled: bool) !Self {
+    pub fn init(alloc: std.mem.Allocator, io: std.Io, r: *reader_mod.Reader, wake: bool, only_one: bool, library: []const u8, tls_enabled: bool, api_token: []const u8) !Self {
         var a: Self = .{
             .gpa = alloc,
             .io = io,
@@ -325,6 +402,7 @@ pub const App = struct {
             .only_one_active = only_one,
             .library = library,
             .tls_enabled = tls_enabled,
+            .api_token = api_token,
             .start_ts = std.Io.Clock.awake.now(io),
             .my_ip = getMyIp(io, alloc),
             .sse_clients = .empty,
@@ -688,12 +766,34 @@ pub const App = struct {
         // /events/: the socket belongs to the SSE delivery thread from
         // here on - register and return WITHOUT closing the connection.
         var path = req.head.target;
-        if (std.mem.indexOfScalar(u8, path, '?')) |qi| path = path[0..qi];
-        if (std.mem.eql(u8, path, "/events/")) {
+        var query: []const u8 = "";
+        if (std.mem.indexOfScalar(u8, path, '?')) |qi| {
+            query = path[qi + 1 ..];
+            path = path[0..qi];
+        }
+        if (std.mem.eql(u8, path, "/events/") or std.mem.eql(u8, path, "/events")) {
+            // EventSource cannot send headers: the token (when
+            // configured) must come as the apiToken query param
+            if (!self.eventsQueryOk(query)) {
+                var r = Resp{ .self = self, .req = &req };
+                r.send(401, "text/plain", "unauthorized") catch {};
+                conn.close(self.io);
+                return;
+            }
             self.sseSubscribe(conn, null);
             return;
         }
         var r = Resp{ .self = self, .req = &req };
+        // all other endpoints require "Authorization: Bearer <token>"
+        // when a token is configured; OPTIONS preflight passes through
+        if (self.api_token.len > 0 and
+            !std.mem.eql(u8, @tagName(req.head.method), "OPTIONS") and
+            !bearerMatches(&req, self.api_token))
+        {
+            r.send(401, "text/plain", "unauthorized") catch {};
+            conn.close(self.io);
+            return;
+        }
         self.route(@tagName(req.head.method), req.head.target, &r) catch {};
         conn.close(self.io);
     }
@@ -741,12 +841,30 @@ pub const App = struct {
         const target = parts.next() orelse return false;
         if (target.len == 0 or target[0] != '/') return false;
         var path = target;
-        if (std.mem.indexOfScalar(u8, path, '?')) |qi| path = path[0..qi];
-        if (std.mem.eql(u8, path, "/events/")) {
+        var query: []const u8 = "";
+        if (std.mem.indexOfScalar(u8, path, '?')) |qi| {
+            query = path[qi + 1 ..];
+            path = path[0..qi];
+        }
+        if (std.mem.eql(u8, path, "/events/") or std.mem.eql(u8, path, "/events")) {
+            // EventSource cannot send headers: the token (when
+            // configured) must come as the apiToken query param
+            if (!self.eventsQueryOk(query)) {
+                var r401 = Resp{ .self = self, .ssl = ssl };
+                r401.send(401, "text/plain", "unauthorized") catch {};
+                return false;
+            }
             self.sseSubscribe(conn, ssl);
             return true;
         }
         var r = Resp{ .self = self, .ssl = ssl };
+        if (self.api_token.len > 0 and
+            !std.mem.eql(u8, method, "OPTIONS") and
+            !rawBearerMatches(head, self.api_token))
+        {
+            r.send(401, "text/plain", "unauthorized") catch {};
+            return false;
+        }
         self.route(method, target, &r) catch {};
         return false;
     }
@@ -755,8 +873,8 @@ pub const App = struct {
         var path = target;
         var query: []const u8 = "";
         if (std.mem.indexOfScalar(u8, path, '?')) |qi| {
-            path = path[0..qi];
             query = path[qi + 1 ..];
+            path = path[0..qi];
         }
         logger.debugPrint("HTTP {s} {s}", .{ method, path });
 
@@ -792,6 +910,17 @@ pub const App = struct {
             return r.send(200, "text/html; charset=utf-8", Html);
         }
         return r.send(404, "text/plain", "404 page not found");
+    }
+
+    // /events/ cannot carry an Authorization header (browser
+    // EventSource): when a token is configured, it must arrive as the
+    // apiToken query parameter
+    fn eventsQueryOk(self: *Self, query: []const u8) bool {
+        if (self.api_token.len == 0) return true;
+        if (self.queryParam(query, "apiToken")) |t| {
+            return tokenEqual(t, self.api_token);
+        }
+        return false;
     }
 
     fn queryParam(self: *Self, query: []const u8, name: []const u8) ?[]const u8 {
