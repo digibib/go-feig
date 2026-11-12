@@ -6,13 +6,11 @@ const Tag = inventory.Tag;
 const reader_mod = @import("reader.zig");
 const http = std.http;
 
-// Raw socket syscalls for the SSE delivery thread (linux): std.Io's
-// net writes only work on the main thread, so subscriber sockets are
-// driven directly with write(2)/close(2); SO_NOSIGNAL keeps a client
-// going away from raising SIGPIPE. On other OSes the dispatchers
-// below degrade to failure stubs, so SSE delivery is disabled there
-// (a subscriber is closed on its first failed write); port to
-// Winsock send() when /events/ is needed on windows.
+// Raw socket syscalls for the SSE delivery thread: std.Io's net
+// writes only work on the main thread, so subscriber sockets are
+// driven directly - on linux with write(2)/close(2) (SO_NOSIGNAL
+// keeps a client going away from raising SIGPIPE), on windows
+// through the C shim (winsock send/closesocket, runtime resolved).
 //
 // Declared under their plain C names: this build's extern has no
 // separate symbol-name syntax, the identifier IS the symbol. The
@@ -24,42 +22,49 @@ const is_linux = @import("builtin").os.tag == .linux;
 extern fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
 extern fn close(fd: c_int) c_int;
 extern fn setsockopt(fd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: c_uint) c_int;
-// TLS (OpenSSL shim, src/tls_shim.c, dlopens libssl at runtime); all
-// references sit behind is_linux branches or dead-on-windows fns
+// socket ops via the C shim (windows: winsock at runtime - the
+// sysroot import libs lack e.g. closesocket; linux: close(2)/write(2))
+extern fn feig_close_socket(sock: ?*anyopaque) c_int;
+extern fn feig_sock_write(sock: ?*anyopaque, buf: [*]const u8, len: c_int) c_int;
+// outbound ip via the C shim (std's connect panics on windows)
+extern fn feig_get_my_ip(buf: [*]u8, len: c_int) c_int;
+// TLS shim (src/tls_shim.c; OpenSSL on linux, SChannel on windows).
+// tls_accept takes the accepted socket as a pointer on both platforms
+// (on linux the fd fits in the low bits, System V ABI).
 extern fn tls_init(cert: [*]const u8, key: [*]const u8) c_int;
-extern fn tls_accept(fd: c_int) ?*anyopaque;
+extern fn tls_accept(sock: ?*anyopaque) ?*anyopaque;
 extern fn tls_read(ssl: ?*anyopaque, buf: [*]u8, len: c_int) c_int;
 extern fn tls_write(ssl: ?*anyopaque, buf: [*]const u8, len: c_int) c_int;
 extern fn tls_free(ssl: ?*anyopaque) void;
 extern fn tls_last_error() [*]const u8;
 extern fn tls_last_err_code() c_int;
 
-fn sockWrite(fd: c_int, buf: [*]const u8, count: usize) isize {
+fn sockWrite(s: *Subscriber, buf: [*]const u8, count: usize) isize {
     if (is_linux) {
-        return write(fd, buf, count);
+        return write(s.fd, buf, count);
     } else {
-        // SSE delivery is disabled on this OS
+        if (s.sock) |sp| return feig_sock_write(sp, buf, @as(c_int, @intCast(count)));
         return -1;
     }
 }
 
-fn sockClose(fd: c_int) c_int {
+fn sockClose(s: *Subscriber) c_int {
     if (is_linux) {
-        return close(fd);
+        return close(s.fd);
     } else {
-        // SSE delivery is disabled on this OS
+        if (s.sock) |sp| return feig_close_socket(sp);
         return 0;
     }
 }
 
 // write(2) may return short or be interrupted; a bounded retry
 // survives EINTR, any persistent error means the peer is gone.
-fn rawWriteAll(fd: c_int, data: []const u8) bool {
+fn rawWriteAll(s: *Subscriber, data: []const u8) bool {
     var off: usize = 0;
     while (off < data.len) {
         var tries: u8 = 0;
         while (true) {
-            const n = sockWrite(fd, data[off..].ptr, data.len - off);
+            const n = sockWrite(s, data[off..].ptr, data.len - off);
             if (n >= 0) {
                 off += @as(usize, @intCast(n));
                 break;
@@ -71,18 +76,14 @@ fn rawWriteAll(fd: c_int, data: []const u8) bool {
     return true;
 }
 
-// TLS over http: the shim runs the handshake and the record layer;
-// on non-linux builds the is_linux branches below are dead, so the
-// tls_* externs are never compiled or linked.
+// TLS over http: the shim runs the handshake and the record layer
+// (OpenSSL on linux, SChannel on windows).
 
 fn tlsFree(ssl: ?*anyopaque) void {
-    if (is_linux) {
-        if (ssl) |x| tls_free(x);
-    }
+    if (ssl) |x| tls_free(x);
 }
 
 fn tlsWriteAll(ssl: *anyopaque, data: []const u8) bool {
-    if (!is_linux) return false;
     var off: usize = 0;
     while (off < data.len) {
         const n = tls_write(ssl, data[off..].ptr, @as(c_int, @intCast(data.len - off)));
@@ -94,28 +95,18 @@ fn tlsWriteAll(ssl: *anyopaque, data: []const u8) bool {
 
 // SSE frame write: TLS if the subscriber has a session, plain write(2) otherwise
 fn subWriteAll(s: *Subscriber, data: []const u8) bool {
-    if (is_linux) {
-        if (s.ssl) |ssl| {
-            return tlsWriteAll(ssl, data);
-        }
+    if (s.ssl) |ssl| {
+        return tlsWriteAll(ssl, data);
     }
-    return rawWriteAll(s.fd, data);
+    return rawWriteAll(s, data);
 }
 
 pub fn tlsInit(cert: []const u8, key: []const u8) bool {
-    if (is_linux) {
-        return tls_init(cert.ptr, key.ptr) == 0;
-    } else {
-        return false;
-    }
+    return tls_init(cert.ptr, key.ptr) == 0;
 }
 
 pub fn tlsLastError() []const u8 {
-    if (is_linux) {
-        return std.mem.sliceTo(tls_last_error(), 0);
-    } else {
-        return "tls is not supported on this platform (linux only)";
-    }
+    return std.mem.sliceTo(tls_last_error(), 0);
 }
 
 fn tlsReason(code: u16) []const u8 {
@@ -273,6 +264,9 @@ const Ring = struct {
 // the queue is shared with broadcast() under sse_mu.
 pub const Subscriber = struct {
     fd: c_int,
+    // the accepted socket as a pointer (a full SOCKET on windows; the
+    // c_int fd above is truncated there)
+    sock: ?*anyopaque = null,
     // TLS session for /events/ over TLS; owned by the delivery thread
     ssl: ?*anyopaque = null,
     queue: Ring = .{},
@@ -283,6 +277,12 @@ pub const Subscriber = struct {
 };
 
 const SSE_CANARY: u64 = 0xA5A5A5A55A5A5A5A;
+
+// one-shot diagnostics for the /events/ delivery path (the windows
+// hang); each flag is written from a single thread only
+var sse_reg_logged = false;
+var sse_loop_logged = false;
+var sse_hdr_logged = false;
 
 // A pointer value is "canonical" when its top 16 bits are all equal;
 // anything else (JSON text, a small integer, a length reinterpreted as
@@ -404,7 +404,7 @@ pub const App = struct {
             .tls_enabled = tls_enabled,
             .api_token = api_token,
             .start_ts = std.Io.Clock.awake.now(io),
-            .my_ip = getMyIp(io, alloc),
+            .my_ip = getMyIp(alloc),
             .sse_clients = .empty,
         };
         // one-time mutex setup (no-op on linux; CRITICAL_SECTION on
@@ -552,13 +552,15 @@ pub const App = struct {
         // the socket handle is a raw fd (int) on linux, a pointer
         // value (SOCKET) on windows
         const fd: c_int = if (is_linux) conn.socket.handle else @as(c_int, @intCast(@intFromPtr(conn.socket.handle)));
+        // an fd is always non-negative, so the cast to usize is safe
+        const sock: ?*anyopaque = if (is_linux) @ptrFromInt(@as(usize, @intCast(conn.socket.handle))) else conn.socket.handle;
         const s = self.gpa.create(Subscriber) catch {
             tlsFree(ssl);
-            _ = sockClose(fd);
+            _ = feig_close_socket(sock);
             return;
         };
         // explicit full init: create() does not guarantee zeroed memory
-        s.* = .{ .fd = fd, .ssl = ssl };
+        s.* = .{ .fd = fd, .sock = sock, .ssl = ssl };
         // a disconnecting client must not take the process down with
         // SIGPIPE (SOL_SOCKET, SO_NOSIGNAL - linux)
         if (is_linux) {
@@ -567,7 +569,7 @@ pub const App = struct {
         }
         self.sse_mu.lock(self.io) catch {
             tlsFree(s.ssl);
-            _ = sockClose(s.fd);
+            _ = sockClose(s);
             self.gpa.destroy(s);
             return;
         };
@@ -575,11 +577,16 @@ pub const App = struct {
         self.sse_clients.append(self.gpa, s) catch {
             self.sse_mu.unlock(self.io);
             tlsFree(s.ssl); // never registered: we own it
-            _ = sockClose(s.fd); // never registered: we own it
+            _ = sockClose(s); // never registered: we own it
             self.gpa.destroy(s);
             return;
         };
         self.sse_mu.unlock(self.io);
+        if (!sse_reg_logged) {
+            sse_reg_logged = true;
+            const sv: u64 = if (s.sock) |sp| @intFromPtr(sp) else 0;
+            logger.debugPrint("sse: first subscriber registered (sock=0x{X})", .{sv});
+        }
     }
 
     // Dedicated SSE delivery thread: std.Io net writes only work on
@@ -596,6 +603,10 @@ pub const App = struct {
     // One pass over all subscribers: first headers, queued events,
     // keep-alive ping. Called from the delivery thread.
     fn deliverOnce(self: *Self) void {
+        if (!sse_loop_logged) {
+            sse_loop_logged = true;
+            logger.debugPrint("sse: delivery thread running", .{});
+        }
         // snapshot the current subscribers (bounded; more is a bug)
         var subs: [16]?*Subscriber = undefined;
         var n: usize = 0;
@@ -654,6 +665,10 @@ pub const App = struct {
                 }
                 s.sent = true;
                 s.last_write = now;
+                if (!sse_hdr_logged) {
+                    sse_hdr_logged = true;
+                    logger.debugPrint("sse: first headers delivered", .{});
+                }
             }
             if (msg) |m| {
                 const va = @intFromPtr(m);
@@ -712,7 +727,7 @@ pub const App = struct {
             self.gpa.destroy(m);
         }
         tlsFree(s.ssl);
-        _ = sockClose(s.fd);
+        _ = sockClose(s);
         self.gpa.destroy(s);
     }
 
@@ -746,11 +761,9 @@ pub const App = struct {
     }
 
     fn handleConnection(self: *Self, conn: std.Io.net.Stream) void {
-        if (is_linux) {
-            if (self.tls_enabled) {
-                self.handleTlsConnection(conn);
-                return;
-            }
+        if (self.tls_enabled) {
+            self.handleTlsConnection(conn);
+            return;
         }
         var recvBuf: [8192]u8 = undefined;
         var sendBuf: [4096]u8 = undefined;
@@ -802,10 +815,12 @@ pub const App = struct {
     // thread over the accepted blocking fd, and the head is read with
     // tls_read (std.http needs the net vtable, main thread only).
     fn handleTlsConnection(self: *Self, conn: std.Io.net.Stream) void {
-        const fd: c_int = if (is_linux) conn.socket.handle else @as(c_int, @intCast(@intFromPtr(conn.socket.handle)));
-        if (tls_accept(fd)) |ssl| {
-            var on: c_int = 1; // SO_NOSIGNAL (SOL_SOCKET)
-            _ = setsockopt(fd, 1, 26, &on, 4);
+        const sock: ?*anyopaque = if (is_linux) @ptrFromInt(@as(usize, @intCast(conn.socket.handle))) else conn.socket.handle;
+        if (tls_accept(sock)) |ssl| {
+            if (is_linux) {
+                var on: c_int = 1; // SO_NOSIGNAL (SOL_SOCKET)
+                _ = setsockopt(conn.socket.handle, 1, 26, &on, 4);
+            }
             if (self.tlsHeadAndRoute(conn, ssl)) return;
             tls_free(ssl);
             conn.close(self.io);
@@ -1139,16 +1154,12 @@ pub const App = struct {
     }
 };
 
-// dummy UDP "connection" to get the outbound IP (port of getMyIP)
-fn getMyIp(io: std.Io, alloc: std.mem.Allocator) []const u8 {
-    const local = std.Io.net.IpAddress.parse("0.0.0.0", 0) catch return "127.0.0.1";
-    const remote = std.Io.net.IpAddress.parse("1.1.1.1", 0) catch return "127.0.0.1";
-    var socket = local.bind(io, .{ .mode = .dgram, .protocol = .udp }) catch return "127.0.0.1";
-    defer socket.close(io);
-    const conn = remote.connect(io, .{ .mode = .dgram }) catch return "127.0.0.1";
-    const address = conn.socket.address;
-    const s = std.fmt.allocPrint(alloc, "{f}", .{address}) catch return "127.0.0.1";
-    // the Go version returns the IP without a port
-    if (std.mem.lastIndexOfScalar(u8, s, ':')) |i| return s[0..i];
-    return s;
+// Outbound IP via the C shim (raw UDP "connect" + getsockname, no
+// packets sent). std's own connect panics on windows: its
+// setSocketOptionAfd hits unreachable on INVALID_PARAMETER.
+fn getMyIp(alloc: std.mem.Allocator) []const u8 {
+    var buf: [16]u8 = undefined;
+    if (feig_get_my_ip(buf[0..].ptr, 16) < 0) return "127.0.0.1";
+    const end = std.mem.indexOfScalar(u8, buf[0..], 0) orelse buf.len;
+    return alloc.dupe(u8, buf[0..end]) catch "127.0.0.1";
 }

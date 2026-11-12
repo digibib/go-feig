@@ -1,6 +1,5 @@
 const std = @import("std");
 const logger = @import("logger.zig");
-const is_linux = @import("builtin").os.tag == .linux;
 const reader_mod = @import("reader.zig");
 const server = @import("server.zig");
 const inventory = @import("inventory.zig");
@@ -41,7 +40,7 @@ const usage: []const u8 =
     \\  -onlyOne            only one active /events/ subscriber (default true)
     \\  -port string        port of http API (default ":1667")
     \\  -tagStandard string tag content standard (default "dansk")
-    \\  -tls                use tls (linux; cert.pem + key.pem in the current directory)
+    \\  -tls                use tls (cert.pem + key.pem in the current directory)
     \\  -wake               keep transponders awake, no tag content (default true)
     \\
 ;
@@ -183,7 +182,6 @@ pub fn main(init: std.process.Init) !void {
 
     var tls_enabled: bool = false;
     if (opts.tls) {
-        if (!is_linux) argError("-tls is not supported on this platform (linux only)", .{});
         // cert.pem and key.pem (PEM) from the current directory
         if (!server.tlsInit("cert.pem", "key.pem")) {
             argError("tls init failed: {s}", .{server.tlsLastError()});

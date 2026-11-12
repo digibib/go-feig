@@ -80,6 +80,8 @@ run-ble: build ## build and run connected to a BLE reader, e.g. make run-ble MAC
 
 build_windows: ## cross-compile windows x64 .exe on linux (zig, needs fedm/shim-windows)
 	@test -f fedm/shim-windows/feigshim.lib || { echo "ERROR: fedm/shim-windows/feigshim.lib not found."; echo "Run scripts\\build-feigshim-windows.bat on a Windows box (VS 2022), copy fedm\\shim-windows\\ back here, commit it, and retry."; exit 1; }
+	# TLS shim (SChannel, pure C) for windows, cross-compiled
+	zig cc -target x86_64-windows-gnu -O3 -c src/tls_shim.c -o build/tls_shim_win.o
 	zig build -Dwindows -Dtarget=x86_64-windows-gnu
 	# stage the deploy unit: shim DLL + VC++ runtime + FEIG DLLs next to the exe
 	cp -f fedm/shim-windows/feigshim.dll fedm/shim-windows/vcruntime140.dll fedm/shim-windows/vcruntime140_1.dll fedm/shim-windows/msvcp140.dll fedm/win-vc143-x64/bin/release/*.dll zig-out/bin/

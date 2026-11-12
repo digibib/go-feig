@@ -93,6 +93,15 @@ pub const BleItem = struct {
     }
 };
 
+// One cumulative BLE discovery entry (fixed buffers; mac is the dedupe key)
+const BleSeen = struct {
+    mac: [32]u8,
+    device_id: [16]u8,
+    reader_type: [64]u8,
+    is_new: bool,
+};
+const maxBleSeen = 64;
+
 // pluginLoadHint annotates SDK errors where one of the on-demand transport
 // plugins failed to load. The BLE plugin (libfeble.so) is not part of the
 // FEDM SDK 7.1.0 linux package.
@@ -134,6 +143,9 @@ pub const Reader = struct {
     write_tag_fail: u64 = 0,
     write_afi_succ: u64 = 0,
     write_afi_fail: u64 = 0,
+    // cumulative BLE discovery results, see bleList
+    ble_seen: [maxBleSeen]BleSeen = undefined,
+    ble_seen_count: usize = 0,
 
     pub fn init(alloc: std.mem.Allocator, io: std.Io) Self {
         var r: Self = .{ .alloc = alloc, .io = io };
@@ -411,28 +423,72 @@ pub const Reader = struct {
         return error.BleStopFailed;
     }
 
-    // BleList drains the BLE discovery queue and returns the readers seen so far
+    // BleList drains the BLE discovery queue into the cumulative list
+    // and returns the readers seen so far (the queue is consumed on
+    // every poll, so without accumulation the list would be empty on
+    // every poll after the first)
     pub fn bleList(self: *Self) ![]BleItem {
         const n = @as(usize, @intCast(@max(fedm_ble_reader_count(), 0)));
-        var items = try self.alloc.alloc(BleItem, n);
-        errdefer self.alloc.free(items);
         var i: usize = 0;
         while (i < n) : (i += 1) {
             var it: FedmBleItem = undefined;
             if (fedm_ble_pop(&it) != 0) break;
-            items[i] = .{
-                .mac = self.alloc.dupe(u8, std.mem.sliceTo(it.mac[0..], 0)) catch return error.BleStopFailed,
-                .device_id = self.alloc.dupe(u8, std.mem.sliceTo(it.deviceId[0..], 0)) catch return error.BleStopFailed,
-                .reader_type = self.alloc.dupe(u8, std.mem.sliceTo(it.readerType[0..], 0)) catch return error.BleStopFailed,
-                .is_new = it.state == 1,
+            self.bleSeenAdd(&it);
+        }
+        var items = try self.alloc.alloc(BleItem, self.ble_seen_count);
+        errdefer self.alloc.free(items);
+        var k: usize = 0;
+        while (k < self.ble_seen_count) : (k += 1) {
+            const seen = self.ble_seen[k];
+            items[k] = .{
+                .mac = self.alloc.dupe(u8, std.mem.sliceTo(seen.mac[0..], 0)) catch return error.BleStopFailed,
+                .device_id = self.alloc.dupe(u8, std.mem.sliceTo(seen.device_id[0..], 0)) catch return error.BleStopFailed,
+                .reader_type = self.alloc.dupe(u8, std.mem.sliceTo(seen.reader_type[0..], 0)) catch return error.BleStopFailed,
+                .is_new = seen.is_new,
             };
         }
-        if (i == n) return items;
-        // pop failed partway (queue shrank): return only the collected items
-        const trimmed = try self.alloc.alloc(BleItem, i);
-        errdefer self.alloc.free(trimmed);
-        for (items[0..i], 0..) |t, k| trimmed[k] = t;
-        self.alloc.free(items);
-        return trimmed;
+        return items;
+    }
+
+    // Merge one popped discovery result into the cumulative list:
+    // dedupe by mac, "gone" (state -1) removes the entry
+    fn bleSeenAdd(self: *Self, it: *const FedmBleItem) void {
+        const mac = std.mem.sliceTo(it.mac[0..], 0);
+        var idx: ?usize = null;
+        var k: usize = 0;
+        while (k < self.ble_seen_count) : (k += 1) {
+            if (std.mem.eql(u8, std.mem.sliceTo(self.ble_seen[k].mac[0..], 0), mac)) {
+                idx = k;
+                break;
+            }
+        }
+        if (it.state == -1) {
+            if (idx) |i| {
+                self.ble_seen[i] = self.ble_seen[self.ble_seen_count - 1];
+                self.ble_seen_count -= 1;
+            }
+            return;
+        }
+        if (idx) |i| {
+            self.bleSeenCopy(i, it);
+            return;
+        }
+        if (self.ble_seen_count >= maxBleSeen) return; // full: skip
+        self.bleSeenCopy(self.ble_seen_count, it);
+        self.ble_seen_count += 1;
+    }
+
+    fn bleSeenCopy(self: *Self, idx: usize, it: *const FedmBleItem) void {
+        const dst = &self.ble_seen[idx];
+        const nm = std.mem.sliceTo(it.mac[0..], 0).len;
+        @memcpy(dst.mac[0..nm], it.mac[0..nm]);
+        dst.mac[nm] = 0;
+        const nd = std.mem.sliceTo(it.deviceId[0..], 0).len;
+        @memcpy(dst.device_id[0..nd], it.deviceId[0..nd]);
+        dst.device_id[nd] = 0;
+        const nt = std.mem.sliceTo(it.readerType[0..], 0).len;
+        @memcpy(dst.reader_type[0..nt], it.readerType[0..nt]);
+        dst.reader_type[nt] = 0;
+        dst.is_new = it.state == 1;
     }
 };

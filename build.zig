@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
         // bare name: zig appends the platform suffixes itself
         // (feigshim.dll / feigshim.lib / feigshim.a)
         exe.root_module.linkSystemLibrary("feigshim", .{});
+        // TLS shim (SChannel), cross-compiled by 'make build_windows';
+        // it resolves all win32 functions at runtime (LoadLibraryA /
+        // GetProcAddress, kernel32), so no extra system libraries
+        exe.root_module.addObjectFile(b.path("build/tls_shim_win.o"));
         b.installArtifact(exe);
     } else {
         // The shim is compiled by the system g++ in 'make build'. The SDK is

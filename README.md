@@ -72,7 +72,7 @@ Windows). Note: the FEDM SDK 7.1.0 linux package does not include the FEBLE plug
   -tagStandard string
         tag content standard (default "dansk")
   -tls
-        use tls (linux only; cert.pem + key.pem in the current directory)
+        use tls (cert.pem + key.pem in the current directory)
   -wake
         Keep inventory state and keep all transponders awake, will not be able to read tag content (default true)
 ```
